@@ -42,7 +42,7 @@ def send_telegram(text):
         print("Telegram mesaj hatası:", e)
 
 async def listen_live_feed():
-    print("🚀 DICHVU321 DÜZELTİLMİŞ BOT BAŞLATILDI")
+    print("🚀 DICHVU321 KONTROLLÜ BOT BAŞLATILDI")
     
     while True:
         try:
@@ -85,7 +85,6 @@ async def listen_live_feed():
                             "Bilinmiyor"
                         )
                         
-                        # Elmas anahtarları genişletildi
                         coins_raw = (
                             payload.get("coins") or 
                             payload.get("coin") or 
@@ -99,15 +98,17 @@ async def listen_live_feed():
                             "0"
                         )
                         
-                        # Katılımcı/Kişi sayısı anahtarları doğru veriyi alacak şekilde genişletildi
+                        # İzleyici sayısını çeken anahtarlar, ekrandaki gerçek değere (viewers/viewerCount) öncelik verecek şekilde düzenlendi
                         viewers_raw = (
-                            payload.get("viewers") or 
                             payload.get("viewerCount") or 
+                            payload.get("viewers") or 
+                            payload.get("totalUser") or
                             payload.get("participants") or 
                             payload.get("participantCount") or
                             payload.get("count") or 
                             payload.get("userCount") or
                             payload.get("people") or
+                            event_data.get("viewerCount") or
                             event_data.get("viewers") or
                             "0"
                         )
