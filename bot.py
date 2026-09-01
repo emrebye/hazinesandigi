@@ -5,7 +5,6 @@ from threading import Thread
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
 
-# Render'ın port hatası vermemesi için sahte web sunucusu
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -17,19 +16,23 @@ def run_dummy_server():
     server = HTTPServer(('0.0.0.0', port), SimpleHTTPRequestHandler)
     server.serve_forever()
 
-# Render ortam değişkenlerini al
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-SENIN_TELEGRAM_ID = os.environ.get("TELEGRAM_ID")
+SENIN_TELEGRAM_ID = os.environ.get("TELEGRAM_ID", "")
+
+# Kullanıcı adının başında @ yoksa otomatik ekle
+if SENIN_TELEGRAM_ID and not SENIN_TELEGRAM_ID.startswith("@"):
+    SENIN_TELEGRAM_ID = f"@{SENIN_TELEGRAM_ID}"
 
 async def ai_mesaj_analiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Mesaj boşsa işlem yapma
-    if not update.message or not update.message.text:
+    # Kanal gönderileri veya normal grup mesajlarını yakala
+    mesaj_obj = update.effective_message
+    if not mesaj_obj or not mesaj_obj.text:
         return
 
-    mesaj = update.message.text
+    mesaj = mesaj_obj.text
 
     # Hazine sandığı kontrolü
-    if "HAZİNE SANDIĞI" in mesaj:
+    if "HAZİNE SANDIĞI" in mesaj.upper():
         elmas_match = re.search(r'ELMAS:\s*(\d+)', mesaj, re.IGNORECASE)
         kisi_match = re.search(r'DAĞITILAN:\s*(\d+)\s*KİŞİ', mesaj, re.IGNORECASE)
 
@@ -40,7 +43,7 @@ async def ai_mesaj_analiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if kisi > 0:
                 kisi_basi_deger = elmas / kisi
 
-                # Kişi başı değer >= 1.5 veya Kişi <= 8 ve Elmas >= 10 ise uyar
+                # Fırsat kriteri
                 is_rare_opportunity = (kisi_basi_deger >= 1.5) or (kisi <= 8 and elmas >= 10)
 
                 if is_rare_opportunity:
@@ -50,17 +53,15 @@ async def ai_mesaj_analiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         f"📊 **Kişi Başı:** {kisi_basi_deger:.1f} Elmas\n"
                         f"⚡ **Çabuk Katıl!**"
                     )
-                    await update.message.reply_text(uyari_metni, parse_mode="Markdown")
+                    await mesaj_obj.reply_text(uyari_metni, parse_mode="Markdown")
 
 if __name__ == '__main__':
-    # Sahte sunucuyu arka planda başlat
     Thread(target=run_dummy_server, daemon=True).start()
     
-    # Telegram Botunu Başlat
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     
-    # filters.ALL veya bot mesajlarını kapsayacak şekilde güncellendi
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), ai_mesaj_analiz))
+    # Hem normal grup mesajlarını hem de kanaldan gelen iletileri dinle
+    app.add_handler(MessageHandler(filters.ALL, ai_mesaj_analiz))
     
     print("AI Akıllı Filtre Botu Aktif...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
