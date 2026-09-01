@@ -23,7 +23,8 @@ TELEGRAM_BOT_TOKEN = os.getenv("BOT_TOKEN", "8910200072:AAHKi4G2GkhWupvBIfx2KoCr
 TELEGRAM_CHAT_ID = os.getenv("CHAT_ID", "5050032521")
 SENIN_TELEGRAM_ID = "@Jiminienn"
 
-PROXY_URL = "https://dichvu321.com/proxy.php?stream=all&live=4000"
+# Hızlı ve Sadece Sandık Odaklı Canlı Bağlantı Linki
+PROXY_URL = "https://dichvu321.com/proxy.php?stream=box&live=1000"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
@@ -31,7 +32,7 @@ HEADERS = {
     "Referer": "https://dichvu321.com/"
 }
 
-# --- 3. TELEGRAM MESAJ GÖNDERME VE HASSAS AI FİLTRE ---
+# --- 3. TELEGRAM MESAJ GÖNDERME VE FİLTRE ---
 def send_telegram(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     try:
@@ -45,7 +46,7 @@ def send_telegram(text):
         print("Telegram mesaj hatası:", e)
 
 async def listen_live_feed():
-    print("🚀 DICHVU321 BİLDİRİM BOTU BAŞLATILDI")
+    print("🚀 DICHVU321 BİLDİRİM BOTU (HIZLI MOD) BAŞLATILDI")
     
     while True:
         try:
@@ -59,7 +60,7 @@ async def listen_live_feed():
                 print(f"Canlı akışa bağlanılıyor: {ws_url}")
 
                 async with websockets.connect(ws_url, additional_headers=HEADERS) as websocket:
-                    print("Bağlantı başarılı! Dichvu321 sandıkları dinleniyor...")
+                    print("Bağlantı başarılı! Hızlı sandık akışı dinleniyor...")
 
                     async for message in websocket:
                         try:
