@@ -21,10 +21,7 @@ def run_dummy_server():
 # --- 2. AYARLAR VE ÇEVRE DEĞİŞKENLERİ ---
 TELEGRAM_BOT_TOKEN = os.getenv("BOT_TOKEN", "8910200072:AAHKi4G2GkhWupvBIfx2KoCruKrmMcTEbYw")
 TELEGRAM_CHAT_ID = os.getenv("CHAT_ID", "5050032521")
-SENIN_TELEGRAM_ID = os.getenv("TELEGRAM_ID", "@Jiminienn")
-
-if SENIN_TELEGRAM_ID and not SENIN_TELEGRAM_ID.startswith("@"):
-    SENIN_TELEGRAM_ID = f"@{SENIN_TELEGRAM_ID}"
+SENIN_TELEGRAM_ID = "@Jiminienn"
 
 PROXY_URL = "https://dichvu321.com/proxy.php?stream=all&live=4000"
 
