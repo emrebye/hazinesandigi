@@ -1,11 +1,11 @@
+import os
 import re
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
 
-# ================= AYARLAR =================
-BOT_TOKEN = "BOTFATHER_TOKEN_BURAYA"  # BotFather'dan aldığın token
-SENIN_TELEGRAM_ID = "@kullanici_adin" # Telegram kullanıcı adın (Örn: @emrebye)
-# ============================================
+# Render'daki Environment Variables alanından verileri çeker
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+SENIN_TELEGRAM_ID = os.environ.get("TELEGRAM_ID")
 
 async def ai_mesaj_analiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
@@ -24,8 +24,7 @@ async def ai_mesaj_analiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if kisi > 0:
                 kisi_basi_deger = elmas / kisi
 
-                # Yapay Zeka Karar Mekanizması:
-                # Kişi başı elmas değeri yüksekse VEYA toplam dağıtılan kişi sayısı azsa
+                # Kişi başı değer yüksekse veya toplam kişi azsa alarm ver
                 is_rare_opportunity = (kisi_basi_deger >= 1.5) or (kisi <= 8 and elmas >= 10)
 
                 if is_rare_opportunity:
