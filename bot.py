@@ -46,7 +46,7 @@ def send_telegram(text):
         print("Telegram mesaj hatası:", e)
 
 async def listen_live_feed():
-    print("🚀 DICHVU321 BİLDİRİM BOTU (YÜKSEK ÖDÜL & AZ KİŞİ MODU) BAŞLATILDI")
+    print("🚀 DICHVU321 BİLDİRİM BOTU (SADECE AZ KİŞİ MODU) BAŞLATILDI")
     
     while True:
         try:
@@ -90,7 +90,7 @@ async def listen_live_feed():
                             "Bilinmiyor"
                         )
                         
-                        # Elmas Miktarı
+                        # Elmas Miktarı (Sadece gösterim için alınıyor, filtrede kullanılmıyor)
                         coins_raw = (
                             payload.get("coins") or 
                             payload.get("coin") or 
@@ -124,35 +124,31 @@ async def listen_live_feed():
                             amount = 0
                             people = 0
 
-                        # --- YENİ YÜKSEK ÖDÜL & AZ KİŞİ FİLTRE MANTIĞI ---
-                        MIN_ELMAS = 20
-                        MAX_ELMAS = 5000
-                        MAX_KISI = 50
+                        # --- TEK VE NET KİRTER: SADECE KİŞİ SAYISI ---
+                        # Buradaki '20' rakamını en fazla kaç kişi olmasını istiyorsan değiştirebilirsin (Örn: 15, 20, 25 vb.)
+                        MAX_KISI_SINIRI = 20  
 
-                        # Şartlar:
-                        # 1. Ödül 20 ile 5000 elmas arasında olacak.
-                        # 2. Katılan kişi sayısı en fazla 50 olacak.
-                        is_rare_opportunity = (MIN_ELMAS <= amount <= MAX_ELMAS) and (people <= MAX_KISI)
+                        is_few_people = (0 < people <= MAX_KISI_SINIRI)
 
-                        if not is_rare_opportunity:
-                            print(f"⏩ Kriter Dışı Elendi: @{clean_username} (Elmas: {amount}, Kişi: {people})")
+                        if not is_few_people:
+                            print(f"⏩ Kalabalık Elendi: @{clean_username} (Kişi: {people}, Elmas: {amount})")
                             continue
 
                         display_username = f"@{clean_username}"
                         live_link = payload.get("link") or payload.get("url") or event_data.get("link") or f"https://www.tiktok.com/@{clean_username}/live"
 
                         mesaj = (
-                            f"🤖 **YÜKSEK ÖDÜLLÜ FIRSAT!** {SENIN_TELEGRAM_ID}\n\n"
+                            f"🤖 **AZ KİŞİLİ FIRSAT!** {SENIN_TELEGRAM_ID}\n\n"
                             f"🎁 **HAZİNE SANDIĞI**\n"
                             f"👤 **YAYINCI:** `{display_username}`\n"
-                            f"💎 **ELMAS:** {int(amount)}\n"
-                            f"👥 **DAĞITILAN:** {int(people)} KİŞİ\n\n"
+                            f"👥 **DAĞITILAN:** {int(people)} KİŞİ\n"
+                            f"💎 **ELMAS:** {int(amount)}\n\n"
                             f"⚡ **Kaçırma, hemen yayına gir:**\n"
                             f"{live_link}"
                         )
 
                         send_telegram(mesaj)
-                        print(f"🎯 HEDEFLENEN SANDIK YAKALANDI: {display_username} (Elmas: {amount}, Kişi: {people})")
+                        print(f"🎯 AZ KİŞİLİ SANDIK YAKALANDI: {display_username} (Kişi: {people})")
 
         except Exception as e:
             print(f"Bağlantı koptu veya hata oluştu: {e}")
