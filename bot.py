@@ -6,7 +6,6 @@ import websockets
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from threading import Thread
 
-# --- 1. RENDER KAPANMASIN DIYE SAHTE PORT SUNUCUSU ---
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -18,7 +17,6 @@ def run_dummy_server():
     server = HTTPServer(('0.0.0.0', port), SimpleHTTPRequestHandler)
     server.serve_forever()
 
-# --- 2. AYARLAR VE ÇEVRE DEĞİŞKENLERİ ---
 TELEGRAM_BOT_TOKEN = os.getenv("BOT_TOKEN", "8910200072:AAHKi4G2GkhWupvBIfx2KoCruKrmMcTEbYw")
 TELEGRAM_CHAT_ID = os.getenv("CHAT_ID", "5050032521")
 SENIN_TELEGRAM_ID = "@Jiminienn"
@@ -44,7 +42,7 @@ def send_telegram(text):
         print("Telegram mesaj hatası:", e)
 
 async def listen_live_feed():
-    print("🚀 DICHVU321 KADEMELİ ORAN BOTU BAŞLATILDI")
+    print("🚀 DICHVU321 DÜZELTİLMİŞ BOT BAŞLATILDI")
     
     while True:
         try:
@@ -58,7 +56,7 @@ async def listen_live_feed():
                 print(f"Canlı akışa bağlanılıyor: {ws_url}")
 
                 async with websockets.connect(ws_url, additional_headers=HEADERS) as websocket:
-                    print("Bağlantı başarılı! Kademeli akış dinleniyor...")
+                    print("Bağlantı başarılı! Akış taranıyor...")
 
                     async for message in websocket:
                         try:
@@ -87,6 +85,7 @@ async def listen_live_feed():
                             "Bilinmiyor"
                         )
                         
+                        # Elmas anahtarları genişletildi
                         coins_raw = (
                             payload.get("coins") or 
                             payload.get("coin") or 
@@ -94,15 +93,21 @@ async def listen_live_feed():
                             payload.get("elmas") or 
                             payload.get("value") or 
                             payload.get("diamond") or
+                            payload.get("diamonds") or
+                            payload.get("prize") or
                             event_data.get("coins") or
                             "0"
                         )
                         
+                        # Katılımcı/Kişi sayısı anahtarları doğru veriyi alacak şekilde genişletildi
                         viewers_raw = (
                             payload.get("viewers") or 
                             payload.get("viewerCount") or 
                             payload.get("participants") or 
+                            payload.get("participantCount") or
                             payload.get("count") or 
+                            payload.get("userCount") or
+                            payload.get("people") or
                             event_data.get("viewers") or
                             "0"
                         )
@@ -119,26 +124,24 @@ async def listen_live_feed():
                             amount = 0
                             people = 0
 
-                        # --- SENİN İSTEDİĞİN KADEMELİ ORAN MANTIĞI ---
-                        # Ödül miktarına göre izin verilen maksimum kişi sınırını belirliyoruz:
+                        # Kademeli sınır matrisi
                         if amount <= 20:
-                            max_kisi_izni = 7       # 20'lik sandıkta max 7 kişi
+                            max_kisi_izni = 7
                         elif amount <= 30:
-                            max_kisi_izni = 14      # 30'luk sandıkta max 14 kişi
+                            max_kisi_izni = 14
                         elif amount <= 50:
-                            max_kisi_izni = 22      # 50'lik sandıkta max 22 kişi
+                            max_kisi_izni = 22
                         elif amount <= 100:
-                            max_kisi_izni = 35      # 100'lük sandıkta max 35 kişi
+                            max_kisi_izni = 35
                         elif amount <= 500:
-                            max_kisi_izni = 60      # 500'lük sandıkta max 60 kişi
+                            max_kisi_izni = 60
                         elif amount <= 1000:
-                            max_kisi_izni = 100     # 1000'lik sandıkta max 100 kişi
+                            max_kisi_izni = 100
                         else:
-                            max_kisi_izni = 150     # 5000 ve üzeri dev sandıklarda max 150 kişi
+                            max_kisi_izni = 150
 
-                        # Gelen kişi sayısı, o ödül için belirlediğimiz sınırdan az veya eşitse yakala
                         if people <= 0 or people > max_kisi_izni:
-                            print(f"⏩ Kriter Dışı Elendi: @{clean_username} (Elmas: {amount}, Kişi: {people}, Sınır: {max_kisi_izni})")
+                            print(f"⏩ Elendi: @{clean_username} (Elmas: {amount}, Kişi: {people}, Sınır: {max_kisi_izni})")
                             continue
 
                         display_username = f"@{clean_username}"
@@ -155,7 +158,7 @@ async def listen_live_feed():
                         )
 
                         send_telegram(mesaj)
-                        print(f"🎯 🎯 YAKALANDI: {display_username} (Elmas: {amount}, Kişi: {people})")
+                        print(f"🎯 DOĞRU YAKALANDI: {display_username} (Elmas: {amount}, Kişi: {people})")
 
         except Exception as e:
             print(f"Bağlantı koptu veya hata oluştu: {e}")
