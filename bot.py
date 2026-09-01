@@ -23,7 +23,6 @@ TELEGRAM_BOT_TOKEN = os.getenv("BOT_TOKEN", "8910200072:AAHKi4G2GkhWupvBIfx2KoCr
 TELEGRAM_CHAT_ID = os.getenv("CHAT_ID", "5050032521")
 SENIN_TELEGRAM_ID = "@Jiminienn"
 
-# Hızlı ve Sadece Sandık Odaklı Canlı Bağlantı Linki
 PROXY_URL = "https://dichvu321.com/proxy.php?stream=box&live=1000"
 
 HEADERS = {
@@ -32,7 +31,6 @@ HEADERS = {
     "Referer": "https://dichvu321.com/"
 }
 
-# --- 3. TELEGRAM MESAJ GÖNDERME VE FİLTRE ---
 def send_telegram(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     try:
@@ -46,11 +44,11 @@ def send_telegram(text):
         print("Telegram mesaj hatası:", e)
 
 async def listen_live_feed():
-    print("🚀 DICHVU321 BİLDİRİM BOTU (SADECE AZ KİŞİ MODU) BAŞLATILDI")
+    print("🚀 DICHVU321 KADEMELİ ORAN BOTU BAŞLATILDI")
     
     while True:
         try:
-            print("Proxy üzerinden bilet (ticket) alınıyor...")
+            print("Proxy üzerinden bilet alınıyor...")
             res = requests.get(PROXY_URL, headers=HEADERS, timeout=10)
             data = res.json()
 
@@ -60,7 +58,7 @@ async def listen_live_feed():
                 print(f"Canlı akışa bağlanılıyor: {ws_url}")
 
                 async with websockets.connect(ws_url, additional_headers=HEADERS) as websocket:
-                    print("Bağlantı başarılı! Hızlı sandık akışı dinleniyor...")
+                    print("Bağlantı başarılı! Kademeli akış dinleniyor...")
 
                     async for message in websocket:
                         try:
@@ -74,7 +72,6 @@ async def listen_live_feed():
                         elif "payload" in event_data and isinstance(event_data["payload"], dict):
                             payload = event_data["payload"]
 
-                        # Kullanıcı Adı Yakalama
                         username = (
                             payload.get("uniqueId") or
                             payload.get("nickname") or
@@ -90,7 +87,6 @@ async def listen_live_feed():
                             "Bilinmiyor"
                         )
                         
-                        # Elmas Miktarı (Sadece gösterim için alınıyor, filtrede kullanılmıyor)
                         coins_raw = (
                             payload.get("coins") or 
                             payload.get("coin") or 
@@ -102,7 +98,6 @@ async def listen_live_feed():
                             "0"
                         )
                         
-                        # Katılımcı/Kişi Sayısı
                         viewers_raw = (
                             payload.get("viewers") or 
                             payload.get("viewerCount") or 
@@ -124,38 +119,48 @@ async def listen_live_feed():
                             amount = 0
                             people = 0
 
-                        # --- TEK VE NET KİRTER: SADECE KİŞİ SAYISI ---
-                        # Buradaki '20' rakamını en fazla kaç kişi olmasını istiyorsan değiştirebilirsin (Örn: 15, 20, 25 vb.)
-                        MAX_KISI_SINIRI = 20  
+                        # --- SENİN İSTEDİĞİN KADEMELİ ORAN MANTIĞI ---
+                        # Ödül miktarına göre izin verilen maksimum kişi sınırını belirliyoruz:
+                        if amount <= 20:
+                            max_kisi_izni = 7       # 20'lik sandıkta max 7 kişi
+                        elif amount <= 30:
+                            max_kisi_izni = 14      # 30'luk sandıkta max 14 kişi
+                        elif amount <= 50:
+                            max_kisi_izni = 22      # 50'lik sandıkta max 22 kişi
+                        elif amount <= 100:
+                            max_kisi_izni = 35      # 100'lük sandıkta max 35 kişi
+                        elif amount <= 500:
+                            max_kisi_izni = 60      # 500'lük sandıkta max 60 kişi
+                        elif amount <= 1000:
+                            max_kisi_izni = 100     # 1000'lik sandıkta max 100 kişi
+                        else:
+                            max_kisi_izni = 150     # 5000 ve üzeri dev sandıklarda max 150 kişi
 
-                        is_few_people = (0 < people <= MAX_KISI_SINIRI)
-
-                        if not is_few_people:
-                            print(f"⏩ Kalabalık Elendi: @{clean_username} (Kişi: {people}, Elmas: {amount})")
+                        # Gelen kişi sayısı, o ödül için belirlediğimiz sınırdan az veya eşitse yakala
+                        if people <= 0 or people > max_kisi_izni:
+                            print(f"⏩ Kriter Dışı Elendi: @{clean_username} (Elmas: {amount}, Kişi: {people}, Sınır: {max_kisi_izni})")
                             continue
 
                         display_username = f"@{clean_username}"
                         live_link = payload.get("link") or payload.get("url") or event_data.get("link") or f"https://www.tiktok.com/@{clean_username}/live"
 
                         mesaj = (
-                            f"🤖 **AZ KİŞİLİ FIRSAT!** {SENIN_TELEGRAM_ID}\n\n"
+                            f"🤖 **KADEMELİ FIRSAT!** {SENIN_TELEGRAM_ID}\n\n"
                             f"🎁 **HAZİNE SANDIĞI**\n"
                             f"👤 **YAYINCI:** `{display_username}`\n"
-                            f"👥 **DAĞITILAN:** {int(people)} KİŞİ\n"
-                            f"💎 **ELMAS:** {int(amount)}\n\n"
+                            f"💎 **ELMAS:** {int(amount)}\n"
+                            f"👥 **DAĞITILAN:** {int(people)} KİŞİ (Sınır: {max_kisi_izni})\n\n"
                             f"⚡ **Kaçırma, hemen yayına gir:**\n"
                             f"{live_link}"
                         )
 
                         send_telegram(mesaj)
-                        print(f"🎯 AZ KİŞİLİ SANDIK YAKALANDI: {display_username} (Kişi: {people})")
+                        print(f"🎯 🎯 YAKALANDI: {display_username} (Elmas: {amount}, Kişi: {people})")
 
         except Exception as e:
             print(f"Bağlantı koptu veya hata oluştu: {e}")
-            print("5 saniye sonra yeniden denenecek...")
             await asyncio.sleep(5)
 
 if __name__ == "__main__":
-    # Render için HTTP sunucusunu başlat
     Thread(target=run_dummy_server, daemon=True).start()
     asyncio.run(listen_live_feed())
