@@ -64,7 +64,7 @@ def check_and_save_cache(cache_key):
         return False
 
 async def listen_live_feed():
-    print("🚀 RENDER ORTAK BULUT BOT AKTİF")
+    print("🚀 KESİN ÇÖZÜM RENDER BOT AKTİF")
     
     while True:
         try:
@@ -105,6 +105,7 @@ async def listen_live_feed():
                         if not clean_username:
                             continue
 
+                        # Nokta, boşluk ve tüm özel karakterleri temizleyerek eşsiz anahtar yapıyoruz
                         cache_key = re.sub(r'[^a-z0-9]', '', clean_username.lower())
 
                         is_already_sent = await asyncio.to_thread(check_and_save_cache, cache_key)
