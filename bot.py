@@ -1,8 +1,39 @@
 import asyncio
 import json
 import os
+import threading
 import requests
 import websockets
+
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+
+# ============================================================
+# RENDER PORT
+# ============================================================
+
+PORT = int(os.getenv("PORT", "10000"))
+
+
+class HealthHandler(BaseHTTPRequestHandler):
+
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(b"Treasure Alert is running")
+
+    def log_message(self, format, *args):
+        pass
+
+
+def start_health_server():
+    server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
+
+    print(f"🌐 Render PORT açıldı: {PORT}")
+
+    server.serve_forever()
+
 
 # ============================================================
 # AYARLAR
@@ -14,10 +45,14 @@ CHAT_ID = os.getenv("CHAT_ID", "-1004325133382")
 PROXY_URL = "https://dichvu321.com/proxy.php?stream=all&live=4000"
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36",
+    "User-Agent": (
+        "Mozilla/5.0 (Linux; Android 10; Mobile) "
+        "AppleWebKit/537.36"
+    ),
     "Origin": "https://dichvu321.com",
     "Referer": "https://dichvu321.com/"
 }
+
 
 # ============================================================
 # UPSTASH CLOUD CACHE
@@ -37,10 +72,9 @@ def check_and_save_cache(cache_key):
     """
     Aynı hazineyi 30 dakika içinde tekrar göndermez.
 
-    SET key 1 EX 1800 NX
-    --------------------
-    OK   = yeni kayıt -> gönder
-    null = kayıt zaten var -> gönderme
+    Upstash:
+        OK   = yeni kayıt
+        null = kayıt zaten var
     """
 
     if not UPSTASH_TOKEN:
@@ -53,6 +87,7 @@ def check_and_save_cache(cache_key):
     }
 
     try:
+
         payload = [
             "SET",
             cache_key,
@@ -73,18 +108,20 @@ def check_and_save_cache(cache_key):
 
         result = response.json().get("result")
 
-        # OK = ilk kez kaydedildi
-        # null = zaten vardı
+        # OK = ilk kez kaydedildi.
+        # Bu yüzden Telegram'a gönderilecek.
         if result == "OK":
-            return True
+            return False
 
-        return False
+        # null = daha önce kaydedilmiş.
+        # Telegram'a tekrar gönderme.
+        return True
 
     except Exception as e:
+
         print(f"⚠️ Upstash cache hatası: {e}")
 
-        # Upstash çalışmıyorsa yanlışlıkla bütün
-        # bildirimleri susturmamak için gönderime devam.
+        # Upstash geçici hata verirse bot tamamen durmasın.
         return False
 
 
@@ -93,8 +130,9 @@ def check_and_save_cache(cache_key):
 # ============================================================
 
 async def send_telegram(mesaj):
+
     if not TELEGRAM_BOT_TOKEN:
-        print("❌ BOT_TOKEN yok!")
+        print("❌ BOT_TOKEN bulunamadı!")
         return False
 
     url = (
@@ -109,6 +147,7 @@ async def send_telegram(mesaj):
     }
 
     try:
+
         loop = asyncio.get_running_loop()
 
         response = await loop.run_in_executor(
@@ -131,7 +170,9 @@ async def send_telegram(mesaj):
         return False
 
     except Exception as e:
+
         print(f"⚠️ Telegram hatası: {e}")
+
         return False
 
 
@@ -156,6 +197,10 @@ async def listen_live_feed():
 
             loop = asyncio.get_running_loop()
 
+            # ----------------------------------------------------
+            # PROXY'DEN WEBSOCKET BİLGİSİ AL
+            # ----------------------------------------------------
+
             res = await loop.run_in_executor(
                 None,
                 lambda: requests.get(
@@ -168,16 +213,24 @@ async def listen_live_feed():
             data = res.json()
 
             if not data.get("success"):
+
                 await asyncio.sleep(1)
+
                 continue
 
             path = data.get("path")
 
             if not path:
+
                 await asyncio.sleep(1)
+
                 continue
 
             ws_url = f"wss://dichvu321.com{path}"
+
+            # ----------------------------------------------------
+            # WEBSOCKET
+            # ----------------------------------------------------
 
             async with websockets.connect(
                 ws_url,
@@ -191,10 +244,16 @@ async def listen_live_feed():
                 async for message in websocket:
 
                     try:
+
                         event_data = json.loads(message)
 
                     except Exception:
+
                         continue
+
+                    # ------------------------------------------------
+                    # DATA
+                    # ------------------------------------------------
 
                     payload = (
                         event_data.get("data")
@@ -206,14 +265,16 @@ async def listen_live_feed():
                     )
 
                     if not isinstance(payload, dict):
+
                         continue
 
                     if payload.get("status") == "connected":
+
                         continue
 
-                    # ====================================================
+                    # ------------------------------------------------
                     # HAZİNE / GOODY BAG AYRIMI
-                    # ====================================================
+                    # ------------------------------------------------
 
                     box_type_raw = str(
                         payload.get("type") or ""
@@ -227,7 +288,11 @@ async def listen_live_feed():
                         payload.get("envelopeInfo") or {}
                     )
 
-                    if not isinstance(envelope_info, dict):
+                    if not isinstance(
+                        envelope_info,
+                        dict
+                    ):
+
                         envelope_info = {}
 
                     business_type = envelope_info.get(
@@ -242,26 +307,33 @@ async def listen_live_feed():
                     )
 
                     if is_goody:
+
                         continue
 
-                    # ====================================================
+                    # ------------------------------------------------
                     # ELMAS
-                    # ====================================================
+                    # ------------------------------------------------
 
-                    coins = payload.get("coins", 0)
+                    coins = payload.get(
+                        "coins",
+                        0
+                    )
 
                     try:
+
                         coins_number = int(coins)
 
                     except Exception:
+
                         coins_number = 0
 
                     if coins_number <= 0:
+
                         continue
 
-                    # ====================================================
+                    # ------------------------------------------------
                     # YAYINCI
-                    # ====================================================
+                    # ------------------------------------------------
 
                     username = (
                         payload.get("uniqueId")
@@ -277,11 +349,12 @@ async def listen_live_feed():
                     )
 
                     if not clean_username:
+
                         continue
 
-                    # ====================================================
+                    # ------------------------------------------------
                     # CAN OPEN / KİŞİ SAYISI
-                    # ====================================================
+                    # ------------------------------------------------
 
                     recipients = payload.get(
                         "canOpen",
@@ -289,16 +362,18 @@ async def listen_live_feed():
                     )
 
                     try:
+
                         recipients_number = int(
                             recipients
                         )
 
                     except Exception:
+
                         recipients_number = 0
 
-                    # ====================================================
-                    # UPSTASH DUPLICATE KORUMASI
-                    # ====================================================
+                    # ------------------------------------------------
+                    # UPSTASH DUPLICATE
+                    # ------------------------------------------------
 
                     cache_key = (
                         "treasurealert:"
@@ -309,12 +384,13 @@ async def listen_live_feed():
                         + str(recipients_number)
                     )
 
-                    is_new = await asyncio.to_thread(
+                    duplicate = await asyncio.to_thread(
                         check_and_save_cache,
                         cache_key
                     )
 
-                    if not is_new:
+                    if duplicate:
+
                         print(
                             f"⏭️ DUPLICATE/CACHE: "
                             f"@{clean_username} "
@@ -324,9 +400,9 @@ async def listen_live_feed():
 
                         continue
 
-                    # ====================================================
+                    # ------------------------------------------------
                     # LEVEL
-                    # ====================================================
+                    # ------------------------------------------------
 
                     level = payload.get(
                         "level",
@@ -334,9 +410,11 @@ async def listen_live_feed():
                     )
 
                     try:
+
                         level = int(level)
 
                     except Exception:
+
                         level = 0
 
                     if level > 0:
@@ -352,9 +430,9 @@ async def listen_live_feed():
                             "🎁 HAZİNE SANDIĞI"
                         )
 
-                    # ====================================================
+                    # ------------------------------------------------
                     # İZLEYİCİ
-                    # ====================================================
+                    # ------------------------------------------------
 
                     viewers = (
                         payload.get("viewerCount")
@@ -365,18 +443,18 @@ async def listen_live_feed():
                         or 0
                     )
 
-                    # ====================================================
+                    # ------------------------------------------------
                     # TIKTOK LINK
-                    # ====================================================
+                    # ------------------------------------------------
 
                     live_link = (
                         f"https://www.tiktok.com/"
                         f"@{clean_username}/live"
                     )
 
-                    # ====================================================
+                    # ------------------------------------------------
                     # TELEGRAM MESAJI
-                    # ====================================================
+                    # ------------------------------------------------
 
                     mesaj = (
                         f"{box_title}\n"
@@ -413,6 +491,15 @@ async def listen_live_feed():
 # ============================================================
 
 if __name__ == "__main__":
+
+    # Render'ın port kontrolü için HTTP sunucusu
+    # ayrı thread'de çalışır.
+    threading.Thread(
+        target=start_health_server,
+        daemon=True
+    ).start()
+
+    # Asıl Treasure Alert sistemi
     asyncio.run(
         listen_live_feed()
     )
