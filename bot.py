@@ -5,7 +5,6 @@ import requests
 import websockets
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from threading import Thread
-import time
 import re
 
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
@@ -60,11 +59,10 @@ def check_and_save_cache(cache_key):
         requests.post(UPSTASH_URL, headers=headers, json=["SET", cache_key, "1", "EX", str(CACHE_TIMEOUT)], timeout=2)
         return False
     except Exception as e:
-        print("Upstash bağlantı hatası:", e)
         return False
 
 async def listen_live_feed():
-    print("🚀 GÜNCELLENMİŞ VERİ AYARI AKTİF")
+    print("🚀 NET KİŞİ SAYISI ÇÖZÜMÜ AKTİF")
     
     while True:
         try:
@@ -106,15 +104,32 @@ async def listen_live_feed():
                             continue
 
                         cache_key = re.sub(r'[^a-z0-9]', '', clean_username.lower())
-
                         is_already_sent = await asyncio.to_thread(check_and_save_cache, cache_key)
                         if is_already_sent:
                             continue
 
-                        # Doğru alan adlarını yakalamak için anahtar sırasını güncelliyoruz
                         room_viewers = payload.get("viewerCount") or payload.get("viewers") or payload.get("totalUserCount") or 0
-                        chest_people = payload.get("userLimit") or payload.get("limit") or payload.get("chestUsers") or payload.get("maxUsers") or payload.get("count") or 0
                         
+                        # Kapsamlı Dağıtılan Kişi Taraması
+                        raw_people = (
+                            payload.get("userCount") or 
+                            payload.get("users") or 
+                            payload.get("people") or
+                            payload.get("userLimit") or 
+                            payload.get("limit") or 
+                            payload.get("chestUsers") or 
+                            payload.get("maxUsers") or 
+                            payload.get("count")
+                        )
+                        
+                        try:
+                            if raw_people:
+                                chest_people = str(int(raw_people))
+                            else:
+                                chest_people = "?"
+                        except:
+                            chest_people = "?"
+
                         live_link = payload.get("link") or payload.get("url") or f"https://www.tiktok.com/@{clean_username}/live"
 
                         mesaj = (
@@ -127,7 +142,6 @@ async def listen_live_feed():
                         )
 
                         asyncio.create_task(send_telegram_async(mesaj))
-                        print(f"✅ DOĞRU VERİ GÖNDERİLDİ: @{clean_username} - Elmas: {int(amount)} - Kişi: {chest_people}")
 
             else:
                 await asyncio.sleep(2)
