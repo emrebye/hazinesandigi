@@ -64,7 +64,7 @@ def check_and_save_cache(cache_key):
         return False
 
 async def listen_live_feed():
-    print("🚀 NET VERİ AKIŞI RENDER BOT AKTİF")
+    print("🚀 GÜNCELLENMİŞ VERİ AYARI AKTİF")
     
     while True:
         try:
@@ -88,7 +88,6 @@ async def listen_live_feed():
                         if "payload" in event_data and isinstance(event_data["payload"], dict):
                             payload.update(event_data["payload"])
 
-                        # Kullanıcı adı tespiti
                         username = payload.get("uniqueId") or payload.get("nickname") or payload.get("username") or payload.get("streamer")
                         if not username:
                             continue
@@ -97,7 +96,6 @@ async def listen_live_feed():
                         if not clean_username:
                             continue
 
-                        # Elmas / Miktar tespiti (Önce net anahtarlara bakıyoruz)
                         coins_raw = payload.get("coins") or payload.get("amount") or payload.get("elmas") or payload.get("diamond") or 0
                         try:
                             amount = float(coins_raw)
@@ -107,16 +105,16 @@ async def listen_live_feed():
                         if amount < 10:
                             continue
 
-                        # Nokta ve boşlukları temizleyerek tekil anahtar oluşturuyoruz
                         cache_key = re.sub(r'[^a-z0-9]', '', clean_username.lower())
 
                         is_already_sent = await asyncio.to_thread(check_and_save_cache, cache_key)
                         if is_already_sent:
                             continue
 
-                        # İzleyici ve Dağıtılan kişi verilerini netleştiriyoruz
-                        room_viewers = payload.get("viewerCount") or payload.get("viewers") or payload.get("userCount") or 25
-                        chest_people = payload.get("chestUsers") or payload.get("maxUsers") or payload.get("limit") or payload.get("userLimit") or 15
+                        # Doğru alan adlarını yakalamak için anahtar sırasını güncelliyoruz
+                        room_viewers = payload.get("viewerCount") or payload.get("viewers") or payload.get("totalUserCount") or 0
+                        chest_people = payload.get("userLimit") or payload.get("limit") or payload.get("chestUsers") or payload.get("maxUsers") or payload.get("count") or 0
+                        
                         live_link = payload.get("link") or payload.get("url") or f"https://www.tiktok.com/@{clean_username}/live"
 
                         mesaj = (
@@ -129,7 +127,7 @@ async def listen_live_feed():
                         )
 
                         asyncio.create_task(send_telegram_async(mesaj))
-                        print(f"✅ DOĞRU VERİ GÖNDERİLDİ: @{clean_username} - Elmas: {int(amount)}")
+                        print(f"✅ DOĞRU VERİ GÖNDERİLDİ: @{clean_username} - Elmas: {int(amount)} - Kişi: {chest_people}")
 
             else:
                 await asyncio.sleep(2)
