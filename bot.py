@@ -32,12 +32,9 @@ def run_dummy_server():
 # AYARLAR
 # ============================================================
 
-# Öncelik: Environment değişkenleri
-# Yoksa mevcut değerleri kullanır.
-
 TELEGRAM_BOT_TOKEN = os.getenv(
     "BOT_TOKEN",
-    "8910200072:AAHKi4G2GkhWupvBIfx2KoCruKrmMcTEbYw"
+    "8910200072:AAHKi4G2GkhWupvBIfx2KoCruKrmMcMcYw"
 )
 
 CHAT_ID = os.getenv(
@@ -179,25 +176,9 @@ def recursive_find_key(obj, wanted_keys, path=""):
 
 def get_chest_recipients(payload):
 
-    """
-    ÖNCELİK SIRASI:
-
-    1. canOpen
-    2. peopleCount
-    3. people_count
-    4. participantCount
-    5. winnerCount
-    6. claimCount
-    7. recipientCount
-    8. grabCount
-
-    Eski botta canOpen kullanılıyordu.
-    Bu nedenle canOpen en yüksek öncelikte.
-    """
-
     key_groups = [
 
-        # Eski yedekte kullanılan gerçek alan
+        # Eski yedekte kullanılan alan
         ["canopen"],
 
         # TikTok protobuf / JSON varyasyonları
@@ -296,6 +277,7 @@ async def listen_live_feed():
     print("🚀 TREASURE ALERT BAŞLADI")
     print("🎁 HAZİNE SANDIĞI TAKİBİ AKTİF")
     print("🎯 canOpen + peopleCount araması aktif")
+    print("🚨 HER HAZİNEDE @jiminienn ETİKET AKTİF")
     print("=" * 60)
 
     while True:
@@ -336,7 +318,7 @@ async def listen_live_feed():
             )
 
             print(
-                f"🔌 WebSocket bağlanıyor..."
+                "🔌 WebSocket bağlanıyor..."
             )
 
             # ------------------------------------------------
@@ -456,7 +438,7 @@ async def listen_live_feed():
                         continue
 
                     # ------------------------------------------------
-                    # ELİMAS
+                    # ELMAS
                     # ------------------------------------------------
 
                     coins = (
@@ -534,12 +516,15 @@ async def listen_live_feed():
                     if recipients is None:
 
                         print("\n" + "=" * 60)
+
                         print(
                             "⚠️ KİŞİ SAYISI BULUNAMADI"
                         )
+
                         print(
                             f"👤 @{clean_username}"
                         )
+
                         print(
                             f"💎 Elmas: {coins_number}"
                         )
@@ -564,7 +549,9 @@ async def listen_live_feed():
                             )
                         )
 
-                        print("=" * 60 + "\n")
+                        print(
+                            "=" * 60 + "\n"
+                        )
 
                         recipients_text = (
                             "BULUNAMADI"
@@ -589,11 +576,13 @@ async def listen_live_feed():
                         )
                     )
 
-                    # ------------------------------------------------
+                    # =================================================
                     # TELEGRAM
-                    # ------------------------------------------------
+                    # HER HAZİNEDE @jiminienn
+                    # =================================================
 
                     mesaj = (
+                        "🚨 @jiminienn\n\n"
                         f"{box_title}\n"
                         f"👤 YAYINCI: "
                         f"@{clean_username}\n"
@@ -613,8 +602,9 @@ async def listen_live_feed():
                     print(
                         f"✅ GÖNDERİLDİ: "
                         f"@{clean_username} | "
-                        f"Elmas: {coins_number} | "
-                        f"Kişi: {recipients_text}"
+                        f"💎 {coins_number} | "
+                        f"📦 {recipients_text} | "
+                        f"🚨 @jiminienn ETİKETLENDİ"
                     )
 
         except Exception as e:
