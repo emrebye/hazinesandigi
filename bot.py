@@ -5,12 +5,13 @@ import requests
 import websockets
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from threading import Thread
+import time
 
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Dichvu321 Treasure Bot Active!")
+        self.wfile.write(b"Clean Chest Bot Active!")
 
 def run_dummy_server():
     port = int(os.environ.get("PORT", 8080))
@@ -19,7 +20,6 @@ def run_dummy_server():
 
 TELEGRAM_BOT_TOKEN = os.getenv("BOT_TOKEN", "8910200072:AAHKi4G2GkhWupvBIfx2KoCruKrmMcTEbYw")
 TELEGRAM_CHAT_ID = os.getenv("CHAT_ID", "5050032521")
-SENIN_TELEGRAM_ID = "@Jiminienn"
 
 PROXY_URL = "https://dichvu321.com/proxy.php?stream=box&live=1000"
 
@@ -28,6 +28,10 @@ HEADERS = {
     "Origin": "https://dichvu321.com",
     "Referer": "https://dichvu321.com/"
 }
+
+# Aynı isimleri tekrar göndermemek için hafıza (Yayıncı adı -> Gönderilme Zamanı)
+sent_cache = {}
+CACHE_TIMEOUT = 300  # 5 dakika boyunca aynı kullanıcı tekrar gönderilmez
 
 def send_telegram(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -42,13 +46,8 @@ def send_telegram(text):
         print("Telegram mesaj hatası:", e)
 
 def parse_box_data(payload):
-    """
-    Yayındaki toplam izleyici ile sandığa dağıtılan kişi sayısını kesin olarak ayrıştırır.
-    """
-    # 1. Sandığa dağıtılan kişi sınırı (Sandık kontenjanı / slot)
-    chest_keys = ["chestUsers", "maxUsers", "limit", "slot", "boxUserCount", "recipientCount", "max_people", "userCount"]
     chest_people = None
-    for k in chest_keys:
+    for k in ["chestUsers", "maxUsers", "limit", "slot", "boxUserCount", "recipientCount", "max_people", "userCount"]:
         if k in payload and payload[k] is not None:
             try:
                 val = int(payload[k])
@@ -56,23 +55,20 @@ def parse_box_data(payload):
                     chest_people = val
                     break
             except:
-            
                 pass
 
-    # Eğer özel anahtar bulunamazsa genel sayıları tarayalım
     if chest_people is None:
         for k, v in payload.items():
             k_lower = str(k).lower()
             if any(term in k_lower for term in ["chest", "box", "limit", "slot", "recipient"]):
                 try:
                     val = int(v)
-                    if 0 < val < 500: # Sandık kişi sayıları genelde makul rakamlardır
+                    if 0 < val < 500:
                         chest_people = val
                         break
                 except:
                     pass
 
-    # 2. Yayındaki toplam izleyici sayısı
     room_viewers = 0
     for k in ["viewerCount", "viewers", "roomViewers", "participantCount"]:
         if k in payload and payload[k] is not None:
@@ -85,22 +81,18 @@ def parse_box_data(payload):
     return chest_people, room_viewers
 
 async def listen_live_feed():
-    print("🚀 SANDIK VE ODA KİŞİ AYRIŞTIRMA SİSTEMİ BAŞLATILDI")
+    print("🚀 TEMİZ FORMAT VE TEKRAR ENGELLEME SİSTEMİ AKTİF")
     
     while True:
         try:
-            print("Proxy üzerinden bilet alınıyor...")
             res = requests.get(PROXY_URL, headers=HEADERS, timeout=10)
             data = res.json()
 
             if data.get("success"):
                 path = data.get("path")
                 ws_url = f"wss://dichvu321.com{path}"
-                print(f"Canlı akışa bağlanılıyor: {ws_url}")
 
                 async with websockets.connect(ws_url, additional_headers=HEADERS) as websocket:
-                    print("Bağlantı başarılı! Akış taranıyor...")
-
                     async for message in websocket:
                         try:
                             event_data = json.loads(message)
@@ -131,7 +123,6 @@ async def listen_live_feed():
                         except ValueError:
                             amount = 0
 
-                        # Sandığa dağıtılan kişi ve oda izleyicisini net olarak ayırıyoruz
                         chest_people, room_viewers = parse_box_data(payload)
 
                         clean_username = str(username).replace("@", "").strip()
@@ -141,29 +132,36 @@ async def listen_live_feed():
                         if amount <= 0 or chest_people is None:
                             continue
 
-                        print(f"Kontrol -> @{clean_username} | Elmas: {int(amount)} | Sandığa Dağıtılan: {chest_people} | Oda İzleyicisi: {room_viewers}")
+                        # Süre aşımı geçmiş eski kayıtları temizle
+                        current_time = time.time()
+                        expired_keys = [k for k, t in sent_cache.items() if current_time - t > CACHE_TIMEOUT]
+                        for k in expired_keys:
+                            del sent_cache[k]
 
-                        # Kriter: Ödül yüksek (örn: 20 ve üstü) VE sandığın dağıtıldığı kişi sayısı az (örn: 15 ve altı)
-                        if amount >= 20 and chest_people <= 15:
+                        # Aynı kullanıcı daha önce gönderildiyse atla
+                        if clean_username in sent_cache:
+                            continue
+
+                        # İstediğin kriter (Örn: Elmas 15 ve üstü, dağıtılan kişi 20'den az)
+                        if amount >= 15 and chest_people <= 20:
                             display_username = f"@{clean_username}"
                             live_link = payload.get("link") or payload.get("url") or f"https://www.tiktok.com/@{clean_username}/live"
 
                             mesaj = (
-                                f"🤖 **ORANLI FIRSAT!** {SENIN_TELEGRAM_ID}\n\n"
                                 f"🎁 **HAZİNE SANDIĞI**\n"
                                 f"👤 **YAYINCI:** `{display_username}`\n"
+                                f"👁️ **İZLEYİCİ:** {room_viewers}\n"
                                 f"💎 **ELMAS:** {int(amount)}\n"
-                                f"👥 **DAĞITILAN:** {chest_people} KİŞİ\n"
-                                f"👀 **ODA İZLEYİCİSİ:** {room_viewers}\n\n"
-                                f"⚡ **Kaçırma, hemen yayına gir:**\n"
-                                f"{live_link}"
+                                f"📦 **DAĞITILAN:** {chest_people} KİŞİ\n"
+                                f"🔗 {live_link}"
                             )
 
                             send_telegram(mesaj)
-                            print(f"🎯 YAKALANDI VE GÖNDERİLDİ: {display_username} | Elmas: {int(amount)} | Dağıtılan: {chest_people}")
+                            sent_cache[clean_username] = current_time
+                            print(f"✅ GÖNDERİLDİ: {display_username} | Elmas: {int(amount)} | Dağıtılan: {chest_people}")
 
         except Exception as e:
-            print(f"Bağlantı koptu veya hata oluştu: {e}")
+            print(f"Bağlantı hatası: {e}")
             await asyncio.sleep(5)
 
 if __name__ == "__main__":
