@@ -62,7 +62,7 @@ def check_and_save_cache(cache_key):
         return False
 
 async def listen_live_feed():
-    print("🚀 JIMIN KİŞİ SAYISI FİX AKTİF")
+    print("🚀 DİNAMİK KİŞİ SAYISI TARayici AKTİF")
     
     while True:
         try:
@@ -109,28 +109,18 @@ async def listen_live_feed():
 
                         room_viewers = payload.get("viewerCount") or payload.get("viewers") or payload.get("totalUserCount") or 0
                         
-                        # Genişletilmiş Dağıtılan Kişi Taraması
-                        chest_people = (
-                            payload.get("chestUsers") or 
-                            payload.get("maxUsers") or 
-                            payload.get("limit") or 
-                            payload.get("userLimit") or 
-                            payload.get("userCount") or 
-                            payload.get("users") or 
-                            payload.get("count") or
-                            payload.get("participantCount") or
-                            payload.get("maxPeople") or
-                            payload.get("chestLimit") or
-                            payload.get("boxLimit") or
-                            payload.get("chestCount") or
-                            payload.get("max_users") or
-                            payload.get("user_limit") or
-                            payload.get("chest_users") or
-                            payload.get("people") or
-                            payload.get("num") or
-                            payload.get("capacity") or
-                            15
-                        )
+                        # DİNAMİK TARAMA: Gelen tüm anahtarların içinde arama yapar
+                        chest_people = 15
+                        for k, v in payload.items():
+                            k_lower = str(k).lower()
+                            if any(sub in k_lower for sub in ['user', 'limit', 'count', 'people', 'kisi', 'kutu']):
+                                try:
+                                    val = int(v)
+                                    if 0 < val < 500: # Hazine kişi sayısı mantıklı aralıkta olmalı
+                                        chest_people = val
+                                        break
+                                except:
+                                    pass
 
                         live_link = payload.get("link") or payload.get("url") or f"https://www.tiktok.com/@{clean_username}/live"
 
