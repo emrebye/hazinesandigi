@@ -11,7 +11,7 @@ class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Synced Bot Active!")
+        self.wfile.write(b"Jimin Bot Active!")
 
 def run_dummy_server():
     port = int(os.environ.get("PORT", 8080))
@@ -51,20 +51,19 @@ async def send_telegram_async(text):
 def check_and_save_cache(cache_key):
     headers = {"Authorization": f"Bearer {UPSTASH_TOKEN}", "Content-Type": "application/json"}
     try:
-        # ATOMİK ÇÖZÜM: SET NX komutu. Sadece veritabanında yoksa ekler ve OK döner. 
-        # Zaten varsa (diğer bot eklediyse) None döner. Çakışma imkansız hale gelir.
+        # Tekil anahtar kontrolü (Atomik SET NX)
         payload = ["SET", cache_key, "1", "EX", str(CACHE_TIMEOUT), "NX"]
         res = requests.post(UPSTASH_URL, headers=headers, json=payload, timeout=2)
         data = res.json()
         
         if data.get("result") == "OK":
-            return False # İlk defa eklendi, mesajı gönder
-        return True # Zaten eklenmiş (diğer bot hızlı davranmış), engelle
+            return False # İlk defa yakalandı, gönder
+        return True # Daha önce atılmış, engelle
     except Exception as e:
         return False
 
 async def listen_live_feed():
-    print("🚀 TEKİL MESAJ SİSTEMİ AKTİF")
+    print("🚀 JIMIN BOT AKTİF VE VERİ DİNLEMEDE")
     
     while True:
         try:
@@ -88,6 +87,7 @@ async def listen_live_feed():
                         if "payload" in event_data and isinstance(event_data["payload"], dict):
                             payload.update(event_data["payload"])
 
+                        # Kullanıcı adı
                         username = payload.get("uniqueId") or payload.get("nickname") or payload.get("username") or payload.get("streamer")
                         if not username:
                             continue
@@ -96,6 +96,7 @@ async def listen_live_feed():
                         if not clean_username:
                             continue
 
+                        # Elmas miktarı
                         coins_raw = payload.get("coins") or payload.get("amount") or payload.get("elmas") or payload.get("diamond") or 0
                         try:
                             amount = float(coins_raw)
@@ -105,26 +106,26 @@ async def listen_live_feed():
                         if amount < 10:
                             continue
 
-                        # Sadece harf ve rakam bırakıp küçük harfe çevirerek kusursuz anahtar yapıyoruz
+                        # Nokta ve boşlukları yok eden temiz cache anahtarı
                         cache_key = re.sub(r'[^a-z0-9]', '', clean_username.lower())
 
-                        # Çakışma kontrolü
-                        is_already_sent = await asyncio.to_thread(check_and_save_cache, cache_key)
-                        if is_already_sent:
+                        if await asyncio.to_thread(check_and_save_cache, cache_key):
                             continue
 
+                        # İzleyici sayısı
                         room_viewers = payload.get("viewerCount") or payload.get("viewers") or payload.get("totalUserCount") or 0
                         
-                        raw_people = (
+                        # Dağıtılan kişi sayısı (Tüm olası alternatif anahtarları tarıyoruz)
+                        chest_people = (
                             payload.get("chestUsers") or 
                             payload.get("maxUsers") or 
                             payload.get("limit") or 
                             payload.get("userLimit") or 
                             payload.get("userCount") or 
                             payload.get("users") or 
-                            15
+                            payload.get("count") or
+                            0
                         )
-                        chest_people = int(raw_people) if raw_people else 15
 
                         live_link = payload.get("link") or payload.get("url") or f"https://www.tiktok.com/@{clean_username}/live"
 
@@ -138,6 +139,7 @@ async def listen_live_feed():
                         )
 
                         asyncio.create_task(send_telegram_async(mesaj))
+                        print(f"✅ GÖNDERİLDİ: @{clean_username} | Elmas: {int(amount)} | Kişi: {chest_people}")
 
             else:
                 await asyncio.sleep(2)
