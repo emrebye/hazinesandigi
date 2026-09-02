@@ -29,7 +29,7 @@ def start_health_server():
     server.serve_forever()
 
 # ============================================================
-# AYARLAR VE HTTP SESSION (HIZ İÇİN BAĞLANTI HAVUZU)
+# AYARLAR VE HTTP SESSION (EN HIZLI BAĞLANTI İÇİN)
 # ============================================================
 
 TELEGRAM_BOT_TOKEN = os.getenv("BOT_TOKEN", "8910200072:AAHKi4G2GkhWupvBIfx2KoCruKrmMcTEbYw")
@@ -43,55 +43,52 @@ HEADERS = {
     "Referer": "https://dichvu321.com/"
 }
 
-# Upstash Ayarları (Fallback Token ile Kilit Asla Kapanmaz)
-UPSTASH_URL = os.getenv("UPSTASH_URL", "https://exotic-javelin-180919.upstash.io").rstrip("/")
-UPSTASH_TOKEN = os.getenv("UPSTASH_TOKEN", "gQAAAAAAAsK3AAIgcDFmZGQ3Njk5NjBhODQ0MmY3YTIyNThiZTMzYTU4N2M5Yg")
+# ------------------------------------------------------------
+# UPSTASH REDIS ENTEGRASYONU (SABİTLENMİŞ ANAHTARLAR)
+# ------------------------------------------------------------
+UPSTASH_URL = "https://exotic-javelin-180919.upstash.io"
+UPSTASH_TOKEN = "gQAAAAAAAsK3AAIgcDFmZGQ3Njk5NjBhODQ0MmY3YTIyNThiZTMzYTU4N2M5Yg"
 
-CACHE_TIMEOUT = 1800  # 30 dakika
+CACHE_TIMEOUT = 1800  # 30 dakika kilit süresi
 
-# Hızlı HTTP istekleri için kalıcı oturum
+# HTTP isteklerini hızlandırmak için kalıcı bağlantı havuzu
 http_session = requests.Session()
 
-# Lokal hızlı hafıza kilidi (Upstash ağ gecikmesini de sıfırlamak için)
+# Saniyelik lokal ön bellek (Upstash ağ süresini sıfırlamak için)
 LOCAL_CACHE = set()
 
 # ============================================================
-# HIZLI ATOMİK UPSTASH KİLİT
+# ATOMİK UPSTASH KİLİT MEKANİZMASI
 # ============================================================
 
 def check_and_save_cache(cache_key):
     """
-    Yerel ve Upstash atomik kilit kontrolü.
-    OK   = İlk kez kilitlendi -> Telegram'a gönder (False dön)
-    null = Zaten kilitli -> Engelle (True dön)
+    Upstash Redis üzerinde atomik Set-if-Not-Exists (NX) işlemi yapar.
+    - İlk varan bot 'OK' alır ve False döner (Mesaj atılır).
+    - İkinci varan bot 'null' alır ve True döner (Mesaj engellenir).
     """
-    # 1. Aşama: Çok hızlı yerel kontrol
     if cache_key in LOCAL_CACHE:
         return True
-    
-    if not UPSTASH_TOKEN:
-        print("⚠️ UPSTASH_TOKEN yok: CACHE KAPALI")
-        return False
 
     headers = {
         "Authorization": f"Bearer {UPSTASH_TOKEN}"
     }
 
     try:
-        # Atomik REST GET isteği (HTTP POST'a göre çok daha hızlıdır)
-        url = f"{UPSTASH_URL}/set/{cache_key}/1/NX/EX/{CACHE_TIMEOUT}"
+        # Tek HTTP GET isteğiyle atomik kilit atma
+        url = f"{UPSTASH_URL}/set/hazine_lock:{cache_key}/1/NX/EX/{CACHE_TIMEOUT}"
         response = http_session.get(url, headers=headers, timeout=2)
-        
+
         if response.ok:
             result = response.json().get("result")
             if result == "OK":
                 LOCAL_CACHE.add(cache_key)
-                return False  # Gönderilebilir
-                
-        return True  # Daha önce kilitlenmiş
+                return False  # Kilit başarıyla alındı, mesaja izin ver
+
+        return True  # Zaten kilitli, mesajı engelle
     except Exception as e:
-        print(f"⚠️ Upstash cache hatası: {e}")
-        # Hata durumunda çift mesajı önlemek için kilitli varsayıyoruz
+        print(f"⚠️ Upstash Kilit Hatası: {e}")
+        # Hata durumunda çift mesajı engellemek için kilitli sayıyoruz
         return True
 
 # ============================================================
@@ -123,12 +120,12 @@ async def send_telegram(mesaj):
         return False
 
 # ============================================================
-# CANLI AKIŞ VE HIZLI YAKALAMA
+# CANLI AKIŞ VE DİNLEME
 # ============================================================
 
 async def listen_live_feed():
     print("🚀 YÜKSEK HIZLI HAZİNE BOTU BAŞLADI")
-    print("☁️ Upstash Cloud Cache & Local Cache: AKTİF")
+    print("☁️ Upstash Cloud Redis Kilit: AKTİF")
 
     while True:
         try:
@@ -165,7 +162,7 @@ async def listen_live_feed():
                     if not isinstance(payload, dict) or payload.get("status") == "connected":
                         continue
 
-                    # Goody bag filtreleme
+                    # Goody bag filtresi
                     box_type_raw = str(payload.get("type") or "").lower()
                     source_raw = str(payload.get("source") or "").lower()
                     envelope_info = payload.get("envelopeInfo") if isinstance(payload.get("envelopeInfo"), dict) else {}
@@ -173,7 +170,7 @@ async def listen_live_feed():
                     if envelope_info.get("businessType") == 2 or "goody" in box_type_raw or "goody" in source_raw:
                         continue
 
-                    # Elmas kontrolü
+                    # Elmas filtresi
                     try:
                         coins_number = int(payload.get("coins", 0))
                     except Exception:
@@ -182,7 +179,7 @@ async def listen_live_feed():
                     if coins_number <= 0:
                         continue
 
-                    # Yayıncı kullanıcı adı
+                    # Yayıncı bilgisi
                     username = payload.get("uniqueId") or payload.get("nickname") or payload.get("username") or ""
                     clean_username = re.sub(r'\s+', '', str(username)).replace("@", "").strip()
                     if not clean_username:
@@ -195,15 +192,15 @@ async def listen_live_feed():
                         recipients_number = 0
 
                     # ============================================================
-                    # STANDART ORTAK KİLİT KEY (TERMUX & RENDER BİREBİR AYNI)
+                    # BİREBİR AYNI STANDART REDIS CACHE KEY
                     # ============================================================
-                    cache_key = f"hazine_lock:{clean_username.lower()}:{coins_number}"
+                    cache_key = f"{clean_username.lower()}:{coins_number}"
 
                     duplicate = await asyncio.to_thread(check_and_save_cache, cache_key)
                     if duplicate:
                         continue
 
-                    # Mesaj detayları
+                    # Mesaj formatı
                     try:
                         level = int(payload.get("level", 0))
                     except Exception:
@@ -222,7 +219,6 @@ async def listen_live_feed():
                         f"🔗 {live_link}"
                     )
 
-                    # Asenkron Telegram gönderimi (Görsel işlemi tıkamaz)
                     asyncio.create_task(send_telegram(mesaj))
                     print(f"✅ GÖNDERİLDİ: @{clean_username} | Elmas: {coins_number} | Kişi: {recipients_number}")
 
