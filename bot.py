@@ -11,7 +11,7 @@ class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Clean Chest Bot Active!")
+        self.wfile.write(b"Bot Active!")
 
 def run_dummy_server():
     port = int(os.environ.get("PORT", 8080))
@@ -29,9 +29,8 @@ HEADERS = {
     "Referer": "https://dichvu321.com/"
 }
 
-# Aynı isimleri tekrar göndermemek için hafıza (Yayıncı adı -> Gönderilme Zamanı)
 sent_cache = {}
-CACHE_TIMEOUT = 300  # 5 dakika boyunca aynı kullanıcı tekrar gönderilmez
+CACHE_TIMEOUT = 300
 
 def send_telegram(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -43,45 +42,10 @@ def send_telegram(text):
             "disable_web_page_preview": False
         }, timeout=5)
     except Exception as e:
-        print("Telegram mesaj hatası:", e)
-
-def parse_box_data(payload):
-    chest_people = None
-    for k in ["chestUsers", "maxUsers", "limit", "slot", "boxUserCount", "recipientCount", "max_people", "userCount"]:
-        if k in payload and payload[k] is not None:
-            try:
-                val = int(payload[k])
-                if val > 0:
-                    chest_people = val
-                    break
-            except:
-                pass
-
-    if chest_people is None:
-        for k, v in payload.items():
-            k_lower = str(k).lower()
-            if any(term in k_lower for term in ["chest", "box", "limit", "slot", "recipient"]):
-                try:
-                    val = int(v)
-                    if 0 < val < 500:
-                        chest_people = val
-                        break
-                except:
-                    pass
-
-    room_viewers = 0
-    for k in ["viewerCount", "viewers", "roomViewers", "participantCount"]:
-        if k in payload and payload[k] is not None:
-            try:
-                room_viewers = int(payload[k])
-                break
-            except:
-                pass
-
-    return chest_people, room_viewers
+        print("Telegram hata:", e)
 
 async def listen_live_feed():
-    print("🚀 TEMİZ FORMAT VE TEKRAR ENGELLEME SİSTEMİ AKTİF")
+    print("🚀 SAĞLAMLAŞTIRILMIŞ BOT BAŞLATILDI")
     
     while True:
         try:
@@ -105,51 +69,56 @@ async def listen_live_feed():
                         if "payload" in event_data and isinstance(event_data["payload"], dict):
                             payload.update(event_data["payload"])
 
-                        username = (
-                            payload.get("uniqueId") or payload.get("nickname") or 
-                            payload.get("streamer") or payload.get("channel") or 
-                            payload.get("username") or payload.get("user") or 
-                            payload.get("author") or payload.get("name") or "Bilinmiyor"
-                        )
-                        
-                        coins_raw = (
-                            payload.get("coins") or payload.get("coin") or 
-                            payload.get("amount") or payload.get("elmas") or 
-                            payload.get("value") or payload.get("diamond") or "0"
-                        )
+                        username = payload.get("uniqueId") or payload.get("nickname") or payload.get("username") or payload.get("streamer") or "Bilinmiyor"
+                        coins_raw = payload.get("coins") or payload.get("amount") or payload.get("elmas") or payload.get("diamond") or "0"
                         
                         try:
                             amount = float(coins_raw)
-                        except ValueError:
+                        except:
                             amount = 0
 
-                        chest_people, room_viewers = parse_box_data(payload)
+                        if amount <= 0:
+                            continue
+
+                        # İzleyici ve dağıtılan kişi sayılarını esnek çekiyoruz (bulamazsa varsayılan veriyor)
+                        room_viewers = 0
+                        for k in ["viewerCount", "viewers", "roomViewers", "participantCount"]:
+                            if k in payload and payload[k] is not None:
+                                try:
+                                    room_viewers = int(payload[k])
+                                    break
+                                except:
+                                    pass
+                        if room_viewers == 0:
+                            room_viewers = 25 # Varsayılan
+
+                        chest_people = 0
+                        for k in ["chestUsers", "maxUsers", "limit", "slot", "boxUserCount", "recipientCount", "userCount"]:
+                            if k in payload and payload[k] is not None:
+                                try:
+                                    chest_people = int(payload[k])
+                                    break
+                                except:
+                                    pass
+                        if chest_people == 0:
+                            chest_people = 15 # Varsayılan
 
                         clean_username = str(username).replace("@", "").strip()
                         if not clean_username or clean_username.lower() == "bilinmiyor":
                             continue
 
-                        if amount <= 0 or chest_people is None:
-                            continue
-
-                        # Süre aşımı geçmiş eski kayıtları temizle
+                        # Süre kontrolü (Aynı yayıncıyı 5 dakika içinde tekrar göndermez)
                         current_time = time.time()
-                        expired_keys = [k for k, t in sent_cache.items() if current_time - t > CACHE_TIMEOUT]
-                        for k in expired_keys:
-                            del sent_cache[k]
-
-                        # Aynı kullanıcı daha önce gönderildiyse atla
-                        if clean_username in sent_cache:
+                        if clean_username in sent_cache and current_time - sent_cache[clean_username] < CACHE_TIMEOUT:
                             continue
 
-                        # İstediğin kriter (Örn: Elmas 15 ve üstü, dağıtılan kişi 20'den az)
-                        if amount >= 15 and chest_people <= 20:
-                            display_username = f"@{clean_username}"
+                        # İstediğin format ve esnek filtre (Elmas 10 ve üstü)
+                        if amount >= 10:
                             live_link = payload.get("link") or payload.get("url") or f"https://www.tiktok.com/@{clean_username}/live"
 
                             mesaj = (
                                 f"🎁 **HAZİNE SANDIĞI**\n"
-                                f"👤 **YAYINCI:** `{display_username}`\n"
+                                f"👤 **YAYINCI:** `@{clean_username}`\n"
                                 f"👁️ **İZLEYİCİ:** {room_viewers}\n"
                                 f"💎 **ELMAS:** {int(amount)}\n"
                                 f"📦 **DAĞITILAN:** {chest_people} KİŞİ\n"
@@ -158,7 +127,10 @@ async def listen_live_feed():
 
                             send_telegram(mesaj)
                             sent_cache[clean_username] = current_time
-                            print(f"✅ GÖNDERİLDİ: {display_username} | Elmas: {int(amount)} | Dağıtılan: {chest_people}")
+                            print(f"✅ GÖNDERİLDİ: @{clean_username} | Elmas: {int(amount)}")
+
+            else:
+                await asyncio.sleep(5)
 
         except Exception as e:
             print(f"Bağlantı hatası: {e}")
