@@ -62,7 +62,7 @@ def check_and_save_cache(cache_key):
         return False
 
 async def listen_live_feed():
-    print("🚀 DİNAMİK KİŞİ SAYISI TARayici AKTİF")
+    print("🚀 KİŞİ SAYISI KARIŞMA FIX AKTİF")
     
     while True:
         try:
@@ -107,16 +107,21 @@ async def listen_live_feed():
                         if await asyncio.to_thread(check_and_save_cache, cache_key):
                             continue
 
+                        # İzleyici sayısı (net olarak alınıyor)
                         room_viewers = payload.get("viewerCount") or payload.get("viewers") or payload.get("totalUserCount") or 0
                         
-                        # DİNAMİK TARAMA: Gelen tüm anahtarların içinde arama yapar
+                        # Dağıtılan kişi sayısı (İzleyici anahtarları kesinlikle filtreleniyor)
                         chest_people = 15
                         for k, v in payload.items():
                             k_lower = str(k).lower()
-                            if any(sub in k_lower for sub in ['user', 'limit', 'count', 'people', 'kisi', 'kutu']):
+                            # İzleyici belirten kelimeleri kesinlikle ele
+                            if any(v_sub in k_lower for v_sub in ['viewer', 'viewers', 'room', 'online', 'total']):
+                                continue
+                            # Sadece hazine/kutu/limit belirten anahtarları kabul et
+                            if any(sub in k_lower for sub in ['chest', 'limit', 'box', 'maxusers', 'userlimit', 'people', 'kisi', 'kutu']):
                                 try:
                                     val = int(v)
-                                    if 0 < val < 500: # Hazine kişi sayısı mantıklı aralıkta olmalı
+                                    if 0 < val < 200:
                                         chest_people = val
                                         break
                                 except:
@@ -134,7 +139,7 @@ async def listen_live_feed():
                         )
 
                         asyncio.create_task(send_telegram_async(mesaj))
-                        print(f"✅ GÖNDERİLDİ: @{clean_username} | Elmas: {int(amount)} | Kişi: {chest_people}")
+                        print(f"✅ GÖNDERİLDİ: @{clean_username} | İzleyici: {room_viewers} | Kişi: {chest_people}")
 
             else:
                 await asyncio.sleep(2)
