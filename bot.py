@@ -2,1221 +2,503 @@ import asyncio
 import json
 import os
 import requests
-
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    ContextTypes,
-)
-
-from TikTokLive import TikTokLiveClient
-from TikTokLive.events import (
-    ConnectEvent,
-    DisconnectEvent,
-    EnvelopeEvent,
-)
+import websockets
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from threading import Thread
+import re
+import hashlib
 
 
 # =========================================================
-# AYARLAR
+# RENDER HEALTH SERVER
 # =========================================================
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Synced Bot Active!")
 
-AUTHORIZED_CHAT_ID = os.getenv("AUTHORIZED_CHAT_ID")
-
-CHAT_ID_FILE = "chat_id.txt"
-DATA_FILE = "takip_listesi.json"
-
-# 50 ve üzeri mor zarflar bildirilecek
-MIN_CHEST_VALUE = 50
+    def log_message(self, format, *args):
+        pass
 
 
-# =========================================================
-# UPSTASH
-# İKİ BOTTA DA AYNI UPSTASH HESABI KULLANILACAK
-# =========================================================
-
-UPSTASH_REDIS_REST_URL = os.getenv(
-    "UPSTASH_REDIS_REST_URL"
-)
-
-UPSTASH_REDIS_REST_TOKEN = os.getenv(
-    "UPSTASH_REDIS_REST_TOKEN"
-)
-
-# Aynı olay 30 dakika boyunca tekrar gönderilmez
-CACHE_TIMEOUT = 1800
+def run_dummy_server():
+    port = int(os.environ.get("PORT", "8080"))
+    server = HTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler)
+    server.serve_forever()
 
 
 # =========================================================
-# GLOBAL
+# ANAHTARLAR
 # =========================================================
 
-sent_envelopes = set()
+TELEGRAM_BOT_TOKEN = os.getenv("BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("CHAT_ID")
 
-tracking_tasks = {}
-
-users_lock = asyncio.Lock()
-
-telegram_application = None
+UPSTASH_URL = os.getenv("UPSTASH_REDIS_REST_URL")
+UPSTASH_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN")
 
 
 # =========================================================
-# UPSTASH DUPLICATE KONTROLÜ
+# PROXY
 # =========================================================
 
-def claim_envelope(
-    envelope_id,
-    username,
-    diamond,
-    people,
-    sender,
-):
-    """
-    Aynı mor zarfı birden fazla bot yakalarsa
-    Telegram'a yalnızca İLK bot gönderir.
+PROXY_URL = "https://dichvu321.com/proxy.php?stream=box&live=1000"
 
-    Redis:
-        SET key 1 NX EX 1800
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Linux; Android 10; Mobile) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Mobile Safari/537.36"
+    ),
+    "Origin": "https://dichvu321.com",
+    "Referer": "https://dichvu321.com/",
+}
 
-    NX sayesinde işlem atomiktir.
-    """
 
-    if not UPSTASH_REDIS_REST_URL:
-        print("❌ UPSTASH_REDIS_REST_URL bulunamadı.")
-        print("⛔ Bildirim gönderilmiyor.")
+# =========================================================
+# CACHE
+# =========================================================
+
+CACHE_TIMEOUT = 1800  # 30 dakika
+
+
+# =========================================================
+# BAŞLANGIÇ KONTROLÜ
+# =========================================================
+
+def check_config():
+    missing = []
+
+    if not TELEGRAM_BOT_TOKEN:
+        missing.append("BOT_TOKEN")
+
+    if not TELEGRAM_CHAT_ID:
+        missing.append("CHAT_ID")
+
+    if not UPSTASH_URL:
+        missing.append("UPSTASH_REDIS_REST_URL")
+
+    if not UPSTASH_TOKEN:
+        missing.append("UPSTASH_REDIS_REST_TOKEN")
+
+    if missing:
+        print("❌ Eksik Environment Variable:", ", ".join(missing))
         return False
 
-    if not UPSTASH_REDIS_REST_TOKEN:
-        print("❌ UPSTASH_REDIS_REST_TOKEN bulunamadı.")
-        print("⛔ Bildirim gönderilmiyor.")
-        return False
+    return True
 
-    # -----------------------------------------------------
-    # Öncelik gerçek Envelope ID
-    # -----------------------------------------------------
 
-    if envelope_id:
-        cache_key = (
-            f"mor_zarf:event:{envelope_id}"
-        )
+# =========================================================
+# TELEGRAM
+# =========================================================
 
-    else:
-        # ID bulunamazsa güçlü yedek anahtar
-        cache_key = (
-            f"mor_zarf:"
-            f"{str(username).lower()}:"
-            f"{diamond}:"
-            f"{people}:"
-            f"{str(sender).lower()}"
-        )
-
-    print(
-        f"🔑 Upstash key: {cache_key}"
+async def send_telegram_async(text):
+    url = (
+        f"https://api.telegram.org/bot"
+        f"{TELEGRAM_BOT_TOKEN}/sendMessage"
     )
 
+    def _send():
+        try:
+            response = requests.post(
+                url,
+                json={
+                    "chat_id": TELEGRAM_CHAT_ID,
+                    "text": text,
+                    "parse_mode": "Markdown",
+                    "disable_web_page_preview": False,
+                },
+                timeout=5,
+            )
+
+            if response.ok:
+                return True
+
+            print("❌ Telegram gönderim hatası:", response.text)
+            return False
+
+        except Exception as e:
+            print("❌ Telegram bağlantı hatası:", e)
+            return False
+
+    return await asyncio.to_thread(_send)
+
+
+# =========================================================
+# UPSTASH - ATOMİK TEKİLLEŞTİRME
+# =========================================================
+
+def upstash_request(command):
+    headers = {
+        "Authorization": f"Bearer {UPSTASH_TOKEN}",
+        "Content-Type": "application/json",
+    }
+
+    return requests.post(
+        UPSTASH_URL,
+        headers=headers,
+        json=command,
+        timeout=8,
+    )
+
+
+def claim_cache(cache_key):
+    """
+    İki bot aynı anda aynı olayı görse bile yalnızca biri kazanır.
+
+    SET key 1 NX EX 1800
+
+    OK     -> ilk bot aldı
+    None   -> başka bot daha önce aldı
+    """
+
     try:
-
-        headers = {
-            "Authorization":
-                f"Bearer {UPSTASH_REDIS_REST_TOKEN}",
-            "Content-Type":
-                "application/json",
-        }
-
-        command = [
-            "SET",
-            cache_key,
-            "1",
-            "NX",
-            "EX",
-            str(CACHE_TIMEOUT),
-        ]
-
-        response = requests.post(
-            UPSTASH_REDIS_REST_URL,
-            headers=headers,
-            json=command,
-            timeout=8,
+        response = upstash_request(
+            [
+                "SET",
+                cache_key,
+                "1",
+                "NX",
+                "EX",
+                str(CACHE_TIMEOUT),
+            ]
         )
-
-        response.raise_for_status()
 
         data = response.json()
-
         result = data.get("result")
 
-        # -------------------------------------------------
-        # İLK BOT
-        # -------------------------------------------------
-
         if str(result).upper() == "OK":
-
-            print(
-                "🟢 UPSTASH: İLK BOT KAZANDI"
-            )
-
-            print(
-                "📨 Telegram gönderilebilir."
-            )
-
             return True
 
-        # -------------------------------------------------
-        # BAŞKA BOT ÖNCEDEN ALMIŞ
-        # -------------------------------------------------
-
-        print(
-            "♻️ UPSTASH: BU ZARF ZATEN ALINMIŞ"
-        )
-
-        print(
-            "⏭️ Telegram gönderilmiyor."
-        )
-
         return False
 
     except Exception as e:
+        print("❌ Upstash bağlantı hatası:", e)
 
-        print(
-            "❌ UPSTASH HATASI:"
-        )
-
-        print(e)
-
-        # Upstash çalışmıyorsa iki botun da
-        # aynı mesajı göndermemesi için gönderme.
-        print(
-            "⛔ Güvenlik nedeniyle Telegram gönderilmiyor."
-        )
-
+        # Upstash yoksa gönderme.
+        # Böylece iki botun aynı bildirimi yollama riski oluşmaz.
         return False
 
 
-# =========================================================
-# TAKİP LİSTESİ
-# =========================================================
-
-def load_users():
-
-    if not os.path.exists(DATA_FILE):
-        return []
+def release_cache(cache_key):
+    """
+    Telegram gönderimi başarısız olursa olay tekrar gönderilebilsin.
+    """
 
     try:
-
-        with open(
-            DATA_FILE,
-            "r",
-            encoding="utf-8"
-        ) as f:
-
-            data = json.load(f)
-
-        if not isinstance(data, list):
-            return []
-
-        users = []
-
-        for user in data:
-
-            username = (
-                str(user)
-                .replace("@", "")
-                .strip()
-                .lower()
-            )
-
-            if username:
-                users.append(username)
-
-        return list(dict.fromkeys(users))
-
-    except Exception as e:
-
-        print(
-            f"⚠️ Takip listesi okunamadı: {e}"
-        )
-
-        return []
-
-
-# =========================================================
-# TAKİP LİSTESİ KAYDET
-# =========================================================
-
-def save_users(users):
-
-    try:
-
-        clean_users = []
-
-        for user in users:
-
-            username = (
-                str(user)
-                .replace("@", "")
-                .strip()
-                .lower()
-            )
-
-            if username:
-                clean_users.append(username)
-
-        clean_users = sorted(
-            set(clean_users)
-        )
-
-        with open(
-            DATA_FILE,
-            "w",
-            encoding="utf-8"
-        ) as f:
-
-            json.dump(
-                clean_users,
-                f,
-                ensure_ascii=False,
-                indent=2,
-            )
-
-        print(
-            "💾 Takip listesi kaydedildi."
-        )
-
-    except Exception as e:
-
-        print(
-            f"❌ Takip listesi kaydedilemedi: {e}"
-        )
-
-
-# =========================================================
-# CHAT ID
-# =========================================================
-
-def load_chat_id():
-
-    value = os.getenv("CHAT_ID")
-
-    if value:
-
-        try:
-            return int(value.strip())
-
-        except ValueError:
-            pass
-
-    if not os.path.exists(CHAT_ID_FILE):
-        return None
-
-    try:
-
-        with open(
-            CHAT_ID_FILE,
-            "r",
-            encoding="utf-8"
-        ) as f:
-
-            return int(
-                f.read().strip()
-            )
-
-    except Exception:
-
-        return None
-
-
-# =========================================================
-# YETKİ
-# =========================================================
-
-def authorized(update: Update):
-
-    if not AUTHORIZED_CHAT_ID:
-        return False
-
-    if not update.effective_chat:
-        return False
-
-    try:
-
-        return (
-            update.effective_chat.id
-            == int(AUTHORIZED_CHAT_ID)
-        )
-
-    except Exception:
-
-        return False
-
-
-# =========================================================
-# /EKLE
-# =========================================================
-
-async def ekle_command(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-
-    if not authorized(update):
-        return
-
-    if not context.args:
-
-        await update.message.reply_text(
-            "❌ Kullanıcı adı yazmalısın.\n\n"
-            "Örnek:\n"
-            "/ekle @kullanici"
-        )
-
-        return
-
-    username = (
-        context.args[0]
-        .replace("@", "")
-        .strip()
-        .lower()
-    )
-
-    if not username:
-
-        await update.message.reply_text(
-            "❌ Geçerli bir kullanıcı adı yaz."
-        )
-
-        return
-
-    async with users_lock:
-
-        users = load_users()
-
-        if username in users:
-
-            await update.message.reply_text(
-                f"⚠️ @{username} zaten takip ediliyor."
-            )
-
-            return
-
-        users.append(username)
-
-        save_users(users)
-
-    if username not in tracking_tasks:
-
-        tracking_tasks[username] = (
-            asyncio.create_task(
-                takip_et(username)
-            )
-        )
-
-    await update.message.reply_text(
-        f"✅ @{username} takip listesine eklendi.\n\n"
-        f"🟣 Mor zarf otomatik takibi başladı."
-    )
-
-
-# =========================================================
-# /SİL
-# =========================================================
-
-async def sil_command(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-
-    if not authorized(update):
-        return
-
-    if not context.args:
-
-        await update.message.reply_text(
-            "❌ Kullanıcı adı yazmalısın.\n\n"
-            "Örnek:\n"
-            "/sil @kullanici"
-        )
-
-        return
-
-    username = (
-        context.args[0]
-        .replace("@", "")
-        .strip()
-        .lower()
-    )
-
-    async with users_lock:
-
-        users = load_users()
-
-        if username not in users:
-
-            await update.message.reply_text(
-                f"⚠️ @{username} takip listesinde yok."
-            )
-
-            return
-
-        users.remove(username)
-
-        save_users(users)
-
-    task = tracking_tasks.get(username)
-
-    if task:
-
-        task.cancel()
-
-        try:
-            await task
-
-        except asyncio.CancelledError:
-            pass
-
-        except Exception:
-            pass
-
-        tracking_tasks.pop(
-            username,
-            None
-        )
-
-    await update.message.reply_text(
-        f"🗑️ @{username} takip listesinden çıkarıldı."
-    )
-
-
-# =========================================================
-# /LİSTE
-# =========================================================
-
-async def liste_command(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-
-    if not authorized(update):
-        return
-
-    users = load_users()
-
-    if not users:
-
-        await update.message.reply_text(
-            "📭 Takip listesi boş."
-        )
-
-        return
-
-    text = "📋 TAKİP LİSTESİ\n\n"
-
-    for i, username in enumerate(
-        users,
-        1
-    ):
-
-        if username in tracking_tasks:
-            durum = "🟢"
-        else:
-            durum = "🔴"
-
-        text += (
-            f"{i}. {durum} @{username}\n"
-        )
-
-    text += (
-        f"\n👥 Toplam: {len(users)}"
-    )
-
-    await update.message.reply_text(
-        text
-    )
-
-
-# =========================================================
-# /YARDIM
-# =========================================================
-
-async def yardim_command(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-
-    if not authorized(update):
-        return
-
-    await update.message.reply_text(
-
-        "🟣 MOR ZARF BOTU\n\n"
-
-        "Komutlar:\n\n"
-
-        "/ekle @kullanici\n"
-        "➡️ TikTok kullanıcısı ekle\n\n"
-
-        "/sil @kullanici\n"
-        "➡️ TikTok kullanıcısını sil\n\n"
-
-        "/liste\n"
-        "➡️ Takip listesini göster\n\n"
-
-        "/yardim\n"
-        "➡️ Yardım mesajını göster\n\n"
-
-        "📡 Takip sistemi otomatik çalışır.\n"
-        "▶️ Başlat komutu gerekmez.\n"
-        "⏹️ Durdur komutu gerekmez.\n\n"
-
-        f"💎 Minimum mor zarf değeri: "
-        f"{MIN_CHEST_VALUE}\n\n"
-
-        "♻️ Ortak Upstash duplicate sistemi: AKTİF"
-    )
-
-
-# =========================================================
-# ENVELOPE INFO
-# =========================================================
-
-def get_envelope_info(event):
-
-    try:
-
-        info = getattr(
-            event,
-            "envelope_info",
-            None
-        )
-
-        if info:
-            return info
-
+        upstash_request(["DEL", cache_key])
     except Exception:
         pass
 
-    return None
-
 
 # =========================================================
-# MOR ZARF DEĞERİ
+# EVENT CACHE KEY
 # =========================================================
 
-def get_envelope_value(event):
+def make_cache_key(payload, clean_username, amount, chest_people):
+    """
+    Öncelik:
+    1. eventId
+    2. envelopeId
+    3. event_id
+    4. id
 
-    info = get_envelope_info(event)
+    Bunlar yoksa olay bilgilerinden SHA256 anahtarı oluşturulur.
+    """
 
-    if not info:
-        return None
-
-    fields = [
-
-        "diamond_count",
-        "diamondCount",
-
-        "diamond",
-        "diamonds",
-
-        "coin_count",
-        "coinCount",
-
-        "coins",
-        "coin",
-
-        "value",
-        "amount",
-        "reward",
-        "count",
-    ]
-
-    for field in fields:
-
-        try:
-
-            value = getattr(
-                info,
-                field,
-                None
-            )
-
-            if value is None:
-                continue
-
-            if isinstance(
-                value,
-                (int, float)
-            ):
-
-                return int(value)
-
-            if isinstance(
-                value,
-                str
-            ):
-
-                cleaned = (
-                    value
-                    .replace(",", "")
-                    .strip()
-                )
-
-                if cleaned.isdigit():
-                    return int(cleaned)
-
-        except Exception:
-            continue
-
-    return None
-
-
-# =========================================================
-# MOR ZARF TAKİBİ
-# =========================================================
-
-async def takip_et(username):
-
-    username = (
-        username
-        .replace("@", "")
-        .strip()
-        .lower()
+    event_id = (
+        payload.get("eventId")
+        or payload.get("event_id")
+        or payload.get("envelopeId")
+        or payload.get("envelope_id")
+        or payload.get("id")
     )
+
+    if event_id:
+        safe_event_id = re.sub(
+            r"[^a-zA-Z0-9_-]",
+            "",
+            str(event_id)
+        )
+
+        if safe_event_id:
+            return f"mor_zarf:event:{safe_event_id}"
+
+    sender = (
+        payload.get("sender")
+        or payload.get("senderId")
+        or payload.get("sendUserName")
+        or payload.get("send_user_name")
+        or ""
+    )
+
+    raw = (
+        f"{clean_username}|"
+        f"{amount}|"
+        f"{chest_people}|"
+        f"{sender}"
+    )
+
+    digest = hashlib.sha256(
+        raw.encode("utf-8")
+    ).hexdigest()
+
+    return f"mor_zarf:fallback:{digest}"
+
+
+# =========================================================
+# LIVE FEED
+# =========================================================
+
+async def listen_live_feed():
+
+    print("🚀 RENDER ORTAK BULUT BOT AKTİF")
 
     while True:
 
-        client = None
-
         try:
 
-            print("")
-            print("=" * 60)
+            # -------------------------------------------------
+            # Proxy'den websocket yolu al
+            # -------------------------------------------------
 
-            print(
-                f"📡 @{username} takip başlatılıyor..."
+            res = await asyncio.to_thread(
+                requests.get,
+                PROXY_URL,
+                headers=HEADERS,
+                timeout=5,
             )
 
-            print("=" * 60)
+            data = res.json()
 
-            client = TikTokLiveClient(
-                unique_id=username
-            )
+            if not data.get("success"):
+                print("⚠️ Proxy başarısız, tekrar deneniyor...")
+                await asyncio.sleep(2)
+                continue
 
-            # -------------------------------------------------
-            # BAĞLANDI
-            # -------------------------------------------------
+            path = data.get("path")
 
-            @client.on(ConnectEvent)
-            async def on_connect(event):
+            if not path:
+                print("⚠️ Proxy path vermedi.")
+                await asyncio.sleep(2)
+                continue
 
-                print(
-                    f"✅ @{username} TikTok LIVE'a bağlandı!"
-                )
+            ws_url = f"wss://dichvu321.com{path}"
 
-            # -------------------------------------------------
-            # BAĞLANTI KESİLDİ
-            # -------------------------------------------------
-
-            @client.on(DisconnectEvent)
-            async def on_disconnect(event):
-
-                print(
-                    f"❌ @{username} bağlantısı kesildi."
-                )
+            print("🔌 WebSocket bağlanıyor...")
 
             # -------------------------------------------------
-            # ENVELOPE / MOR ZARF
+            # WebSocket
             # -------------------------------------------------
 
-            @client.on(EnvelopeEvent)
-            async def on_envelope(event):
+            async with websockets.connect(
+                ws_url,
+                additional_headers=HEADERS,
+                ping_interval=None,
+            ) as websocket:
 
-                info = get_envelope_info(
-                    event
-                )
+                print("✅ WebSocket bağlantısı kuruldu.")
 
-                if not info:
-                    return
+                async for message in websocket:
 
-                # ---------------------------------------------
-                # ENVELOPE ID
-                # ---------------------------------------------
+                    try:
+                        event_data = json.loads(message)
+                    except Exception:
+                        continue
 
-                envelope_id = getattr(
-                    info,
-                    "envelope_id",
-                    ""
-                )
+                    # -------------------------------------------------
+                    # Payload birleştirme
+                    # -------------------------------------------------
 
-                if not envelope_id:
+                    payload = event_data.copy()
 
-                    # Bazı sürümlerde farklı isim olabilir
-                    envelope_id = getattr(
-                        info,
-                        "envelopeId",
-                        ""
+                    if (
+                        "data" in event_data
+                        and isinstance(event_data["data"], dict)
+                    ):
+                        payload.update(event_data["data"])
+
+                    if (
+                        "payload" in event_data
+                        and isinstance(event_data["payload"], dict)
+                    ):
+                        payload.update(event_data["payload"])
+
+                    # -------------------------------------------------
+                    # Yayıncı adı
+                    # -------------------------------------------------
+
+                    username = (
+                        payload.get("uniqueId")
+                        or payload.get("nickname")
+                        or payload.get("username")
+                        or payload.get("streamer")
                     )
 
-                # ---------------------------------------------
-                # DISPLAY
-                # ---------------------------------------------
+                    if not username:
+                        continue
 
-                display = str(
-                    getattr(
-                        event,
-                        "display",
-                        ""
-                    )
-                )
-
-                # ---------------------------------------------
-                # DIAMOND
-                # ---------------------------------------------
-
-                diamond = getattr(
-                    info,
-                    "diamond_count",
-                    0
-                )
-
-                if not diamond:
-
-                    diamond = getattr(
-                        info,
-                        "diamondCount",
-                        0
+                    clean_username = (
+                        str(username)
+                        .replace("@", "")
+                        .strip()
                     )
 
-                # ---------------------------------------------
-                # PEOPLE
-                # ---------------------------------------------
+                    if not clean_username:
+                        continue
 
-                people = getattr(
-                    info,
-                    "people_count",
-                    0
-                )
+                    # -------------------------------------------------
+                    # Elmas
+                    # -------------------------------------------------
 
-                if not people:
-
-                    people = getattr(
-                        info,
-                        "peopleCount",
-                        0
+                    coins_raw = (
+                        payload.get("coins")
+                        or payload.get("amount")
+                        or payload.get("elmas")
+                        or payload.get("diamond")
+                        or 0
                     )
 
-                # ---------------------------------------------
-                # SENDER
-                # ---------------------------------------------
+                    try:
+                        amount = float(coins_raw)
+                    except Exception:
+                        amount = 0
 
-                sender = getattr(
-                    info,
-                    "send_user_name",
-                    ""
-                )
+                    # Mevcut bot ayarını koruyoruz
+                    if amount < 10:
+                        continue
 
-                if not sender:
+                    # -------------------------------------------------
+                    # İzleyici
+                    # -------------------------------------------------
 
-                    sender = getattr(
-                        info,
-                        "sendUserName",
-                        ""
+                    room_viewers = (
+                        payload.get("viewerCount")
+                        or payload.get("viewers")
+                        or 25
                     )
 
-                # ---------------------------------------------
-                # TERMINAL
-                # ---------------------------------------------
+                    # -------------------------------------------------
+                    # Sandık kişi sayısı
+                    # -------------------------------------------------
 
-                print("")
-                print("=" * 70)
-
-                print(
-                    "📨 ENVELOPE EVENT"
-                )
-
-                print(
-                    f"👤 Yayın: @{username}"
-                )
-
-                print(
-                    f"💎 Diamond: {diamond}"
-                )
-
-                print(
-                    f"👥 Kişi: {people}"
-                )
-
-                print(
-                    f"👤 Gönderen: {sender}"
-                )
-
-                print(
-                    f"🆔 ID: {envelope_id}"
-                )
-
-                print(
-                    f"📌 Display: {display}"
-                )
-
-                print("=" * 70)
-
-                # ---------------------------------------------
-                # SADECE YENİ ZARF
-                # ---------------------------------------------
-
-                if (
-                    "ENVELOPE_DISPLAY_NEW"
-                    not in display
-                ):
-
-                    print(
-                        "⏭️ Yeni zarf olayı değil."
+                    chest_people = (
+                        payload.get("chestUsers")
+                        or payload.get("maxUsers")
+                        or payload.get("limit")
+                        or 15
                     )
 
-                    return
+                    # -------------------------------------------------
+                    # Canlı yayın linki
+                    # -------------------------------------------------
 
-                # ---------------------------------------------
-                # LOKAL DUPLICATE
-                # ---------------------------------------------
+                    live_link = (
+                        payload.get("link")
+                        or payload.get("url")
+                        or (
+                            f"https://www.tiktok.com/"
+                            f"@{clean_username}/live"
+                        )
+                    )
 
-                if envelope_id:
+                    # -------------------------------------------------
+                    # ORTAK UPSTASH ANAHTARI
+                    # -------------------------------------------------
 
-                    if envelope_id in sent_envelopes:
+                    cache_key = make_cache_key(
+                        payload=payload,
+                        clean_username=clean_username,
+                        amount=int(amount),
+                        chest_people=chest_people,
+                    )
 
+                    # -------------------------------------------------
+                    # ATOMİK CLAIM
+                    # -------------------------------------------------
+
+                    won_claim = await asyncio.to_thread(
+                        claim_cache,
+                        cache_key,
+                    )
+
+                    if not won_claim:
                         print(
-                            "♻️ Lokal: zarf daha önce işlendi."
+                            f"⏭️ Zaten gönderilmiş: "
+                            f"@{clean_username}"
+                        )
+                        continue
+
+                    # -------------------------------------------------
+                    # TELEGRAM MESAJI
+                    # -------------------------------------------------
+
+                    mesaj = (
+                        f"🎁 **HAZİNE SANDIĞI**\n"
+                        f"👤 **YAYINCI:** "
+                        f"`@{clean_username}`\n"
+                        f"👁️ **İZLEYİCİ:** "
+                        f"{room_viewers}\n"
+                        f"💎 **ELMAS:** "
+                        f"{int(amount)}\n"
+                        f"📦 **DAĞITILAN:** "
+                        f"{chest_people} KİŞİ\n"
+                        f"🔗 {live_link}"
+                    )
+
+                    # -------------------------------------------------
+                    # TELEGRAM GÖNDER
+                    # -------------------------------------------------
+
+                    sent = await send_telegram_async(mesaj)
+
+                    if sent:
+                        print(
+                            f"✅ UPSTASH CLAIM + TELEGRAM: "
+                            f"@{clean_username} "
+                            f"| {int(amount)} elmas"
                         )
 
-                        return
+                    else:
+                        # Telegram başarısızsa cache'i bırak.
+                        # Böylece olay yeniden gönderilebilsin.
+                        await asyncio.to_thread(
+                            release_cache,
+                            cache_key,
+                        )
 
-                # ---------------------------------------------
-                # DEĞER
-                # ---------------------------------------------
-
-                envelope_value = (
-                    get_envelope_value(event)
-                )
-
-                if envelope_value is None:
-
-                    print(
-                        "⚠️ Mor zarf bulundu fakat "
-                        "değeri okunamadı."
-                    )
-
-                    return
-
-                print(
-                    f"🟣 MOR ZARF BULUNDU! "
-                    f"💎 {envelope_value}"
-                )
-
-                # ---------------------------------------------
-                # 50 FİLTRESİ
-                # ---------------------------------------------
-
-                if (
-                    envelope_value
-                    < MIN_CHEST_VALUE
-                ):
-
-                    print(
-                        f"⏭️ {envelope_value} < "
-                        f"{MIN_CHEST_VALUE}, "
-                        f"bildirim gönderilmiyor."
-                    )
-
-                    return
-
-                # ---------------------------------------------
-                # UPSTASH ORTAK DUPLICATE
-                # ---------------------------------------------
-
-                claimed = claim_envelope(
-
-                    envelope_id=envelope_id,
-
-                    username=username,
-
-                    diamond=envelope_value,
-
-                    people=people,
-
-                    sender=sender,
-                )
-
-                # ---------------------------------------------
-                # BAŞKA BOT ALMIŞSA
-                # ---------------------------------------------
-
-                if not claimed:
-
-                    return
-
-                # ---------------------------------------------
-                # LOKALE KAYDET
-                # ---------------------------------------------
-
-                if envelope_id:
-
-                    sent_envelopes.add(
-                        envelope_id
-                    )
-
-                # ---------------------------------------------
-                # TIKTOK LIVE LINK
-                # ---------------------------------------------
-
-                live_url = (
-                    f"https://www.tiktok.com/"
-                    f"@{username}/live"
-                )
-
-                # ---------------------------------------------
-                # TELEGRAM BUTONU
-                # ---------------------------------------------
-
-                keyboard = InlineKeyboardMarkup(
-                    [
-                        [
-                            InlineKeyboardButton(
-                                "🔴 CANLI YAYINA GİT",
-                                url=live_url
-                            )
-                        ]
-                    ]
-                )
-
-                # ---------------------------------------------
-                # TELEGRAM MESAJI
-                # ---------------------------------------------
-
-                message = (
-
-                    "🟣🎁 MOR ZARF BULUNDU!\n\n"
-
-                    f"📺 Yayın: @{username}\n"
-
-                    f"💎 Miktar: "
-                    f"{envelope_value}\n"
-
-                    f"👥 Kişi: "
-                    f"{people}\n"
-
-                    f"👤 Gönderen: "
-                    f"@{sender if sender else 'Bilinmiyor'}\n\n"
-
-                    "⚡ Mor zarf yakalandı!"
-                )
-
-                chat_id = load_chat_id()
-
-                if not chat_id:
-
-                    print(
-                        "⚠️ CHAT_ID bulunamadı."
-                    )
-
-                    return
-
-                if telegram_application is None:
-
-                    print(
-                        "⚠️ Telegram uygulaması hazır değil."
-                    )
-
-                    return
-
-                # ---------------------------------------------
-                # TELEGRAM GÖNDER
-                # ---------------------------------------------
-
-                try:
-
-                    await telegram_application.bot.send_message(
-
-                        chat_id=chat_id,
-
-                        text=message,
-
-                        reply_markup=keyboard,
-
-                        disable_web_page_preview=False,
-                    )
-
-                    print(
-                        "📨 🟣 MOR ZARF Telegram'a gönderildi!"
-                    )
-
-                except Exception as e:
-
-                    print(
-                        "❌ Telegram mesaj hatası:"
-                    )
-
-                    print(e)
-
-            # -------------------------------------------------
-            # TIKTOK'A BAĞLAN
-            # -------------------------------------------------
-
-            await client.connect()
-
-        except asyncio.CancelledError:
-
-            print(
-                f"🛑 @{username} takip görevi durduruldu."
-            )
-
-            break
+                        print(
+                            f"↩️ Telegram başarısız, "
+                            f"cache bırakıldı: "
+                            f"@{clean_username}"
+                        )
 
         except Exception as e:
 
-            print("")
-            print(
-                f"⚠️ @{username} bağlantı hatası:"
-            )
+            print("⚠️ WebSocket/Feed hatası:", e)
 
-            print(e)
-
-        finally:
-
-            if client:
-
-                try:
-
-                    await client.disconnect()
-
-                except Exception:
-                    pass
-
-        # -----------------------------------------------------
-        # YENİDEN DENE
-        # -----------------------------------------------------
-
-        print(
-            f"🔄 @{username} için "
-            f"10 saniye sonra tekrar denenecek..."
-        )
-
-        try:
-
-            await asyncio.sleep(10)
-
-        except asyncio.CancelledError:
-
-            print(
-                f"🛑 @{username} takip görevi durduruldu."
-            )
-
-            break
+            await asyncio.sleep(2)
 
 
 # =========================================================
-# TELEGRAM BOTU
+# MAIN
 # =========================================================
 
-async def start_telegram_bot():
+if __name__ == "__main__":
 
-    global telegram_application
+    print("======================================")
+    print("   SYNCED TREASURE BOT")
+    print("   UPSTASH ATOMIC DEDUP AKTİF")
+    print("======================================")
 
-    telegram_application = (
-        Application.builder()
-        .token(BOT_TOKEN)
-        .build()
-    )
+    if not check_config():
+        raise SystemExit(1)
 
-    # /ekle
-    telegram_application.add_handler(
-        CommandHandler(
-            "ekle",
-            ekle_command
-        )
-    )
+    Thread(
+        target=run_dummy_server,
+        daemon=True
+    ).start()
 
-    # /sil
-    telegram_application.add_handler(
-        CommandHandler(
-            "sil",
-            sil_command
-        )
-    )
-
-    # /liste
-    telegram_application.add_handler(
-        CommandHandler(
-            "liste",
-            liste_command
-        )
-    )
-
-    # /yardim
-    telegram_application.add_handler(
-        CommandHandler(
-            "yardim",
-            yardim_command
-        )
-    )
-
-    await telegram_application.initialize()
-
-    await telegram_application.start()
-
-    await telegram_application.updater.start_polling()
-
-    print(
-        "✅ Telegram botu çalışıyor!"
-    )
-
-
-# =========================================================
-# ANA PROGRAM
-# =========================================================
-
-async def main():
-
-    if not BOT_TOKEN:
-
-        print(
-            "❌ BOT_TOKEN bulunamadı."
-        )
-
-        print(
-            "❌ Render Environment Variables "
-            "içinde BOT_TOKEN olmalı."
-        )
-
-        return
-
-    if not UPSTASH_REDIS_REST_URL:
-
-        print(
-            "❌ UPSTASH_REDIS_REST_URL bulunamadı."
-        )
-
-        return
-
-    if not UPSTASH_REDIS_REST_TOKEN:
-
-        print(
-            "❌ UPSTASH_REDIS_REST_TOKEN bulunamadı."
-        )
-
-        return
-
-    users = load_users()
-
-    print("")
-    print("=" * 60)
-
-    print(
-        "🟣 MOR ZARF TELEGRAM BOTU"
-    )
-
-    print("=" * 60)
-
-    print(
-        f"👥 Takip edilen hesap: "
-        f"{len(users)}"
-   
+    asyncio.run(listen_live_feed())
