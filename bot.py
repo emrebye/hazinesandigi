@@ -41,26 +41,43 @@ def send_telegram(text):
     except Exception as e:
         print("Telegram mesaj hatası:", e)
 
-def find_value_smart(data_dict, target_keywords):
+def get_exact_viewers(payload):
     """
-    Sözlük içinde anahtar adında target_keywords geçen veya 
-    değeri sayı olan en uygun alanı akıllıca bulur.
+    Yanlış küçük sayıları (9 vb.) eleyip, doğrudan gerçek 
+    izleyici/katılımcı sayısını veren özel öncelikli ayıklayıcı.
     """
-    if not isinstance(data_dict, dict):
-        return 0
-        
-    for key, value in data_dict.items():
-        key_lower = str(key).lower()
-        for kw in target_keywords:
-            if kw in key_lower:
-                try:
-                    return float(value)
-                except (ValueError, TypeError):
-                    pass
-    return None
+    # 1. Öncelik: Doğrudan ana izleyici anahtarları
+    for key in ["viewerCount", "viewers", "participantCount", "participants", "izleyici", "kisi"]:
+        if key in payload:
+            try:
+                val = float(payload[get_real_key(payload, key)])
+                if val > 0:
+                    return val
+            except:
+                pass
+
+    # 2. Öncelik: İçinde 'viewer' veya 'count' geçen en mantıklı sayısal değer
+    for k, v in payload.items():
+        k_lower = str(k).lower()
+        if "viewer" in k_lower or "participant" in k_lower or "people" in k_lower:
+            try:
+                val = float(v)
+                if val > 0:
+                    return val
+            except:
+                pass
+                
+    # Bulunamazsa varsayılan olarak yüksek bir değer döndür ki yanlışlıkla bildirim atmasın
+    return 9999
+
+def get_real_key(d, target):
+    for k in d.keys():
+        if target.lower() in str(k).lower():
+            return k
+    return target
 
 async def listen_live_feed():
-    print("🚀 DICHVU321 AKILLI KONTROL SİSTEMİ BAŞLATILDI")
+    print("🚀 DICHVU321 NET VE HASSAS KONTROL BAŞLATILDI")
     
     while True:
         try:
@@ -82,14 +99,12 @@ async def listen_live_feed():
                         except:
                             continue
 
-                        # Tüm olası katmanları birleştirip tek bir büyük havuz yapıyoruz
                         payload = event_data.copy()
                         if "data" in event_data and isinstance(event_data["data"], dict):
                             payload.update(event_data["data"])
                         if "payload" in event_data and isinstance(event_data["payload"], dict):
                             payload.update(event_data["payload"])
 
-                        # Kullanıcı Adı
                         username = (
                             payload.get("uniqueId") or payload.get("nickname") or 
                             payload.get("streamer") or payload.get("channel") or 
@@ -97,22 +112,26 @@ async def listen_live_feed():
                             payload.get("author") or payload.get("name") or "Bilinmiyor"
                         )
                         
-                        # --- AKILLI ELMAS TESPİTİ ---
-                        amount = find_value_smart(payload, ["coin", "diamond", "elmas", "amount", "prize", "value", "xu", "jeton"])
-                        if amount is None:
+                        # Elmas Miktarı
+                        coins_raw = (
+                            payload.get("coins") or payload.get("coin") or 
+                            payload.get("amount") or payload.get("elmas") or 
+                            payload.get("value") or payload.get("diamond") or "0"
+                        )
+                        
+                        try:
+                            amount = float(coins_raw)
+                        except ValueError:
                             amount = 0
 
-                        # --- AKILLI İZLEYİCİ / KİŞİ TESPİTİ ---
-                        # İngilizce, Türkçe ve Vietnamca tüm olası sayaç terimlerini tarar
-                        people = find_value_smart(payload, ["viewer", "participant", "count", "people", "user", "kisi", "izleyici", "katilimci", "soluong", "nguoi"])
-                        if people is None:
-                            people = 0
+                        # Hassas ve doğru izleyici tespiti
+                        people = get_exact_viewers(payload)
 
                         clean_username = str(username).replace("@", "").strip()
                         if not clean_username or clean_username.lower() == "bilinmiyor":
                             continue
 
-                        # Kademeli sınır matrisi (Birebir istediğin oranlar)
+                        # Kademeli sınır matrisi
                         if amount <= 20:
                             max_kisi_izni = 7
                         elif amount <= 30:
@@ -128,7 +147,6 @@ async def listen_live_feed():
                         else:
                             max_kisi_izni = 150
 
-                        # Eğer izleyici sayısı 0 okunduysa veya belirlenen sınırın üzerindeyse eliyoruz
                         if people <= 0 or people > max_kisi_izni:
                             print(f"⏩ Elendi: @{clean_username} | Elmas: {int(amount)} | Kişi: {int(people)} (Sınır: {max_kisi_izni})")
                             continue
