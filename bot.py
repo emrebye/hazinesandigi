@@ -41,8 +41,26 @@ def send_telegram(text):
     except Exception as e:
         print("Telegram mesaj hatası:", e)
 
+def find_value_smart(data_dict, target_keywords):
+    """
+    Sözlük içinde anahtar adında target_keywords geçen veya 
+    değeri sayı olan en uygun alanı akıllıca bulur.
+    """
+    if not isinstance(data_dict, dict):
+        return 0
+        
+    for key, value in data_dict.items():
+        key_lower = str(key).lower()
+        for kw in target_keywords:
+            if kw in key_lower:
+                try:
+                    return float(value)
+                except (ValueError, TypeError):
+                    pass
+    return None
+
 async def listen_live_feed():
-    print("🚀 DICHVU321 KONTROLLÜ BOT BAŞLATILDI")
+    print("🚀 DICHVU321 AKILLI KONTROL SİSTEMİ BAŞLATILDI")
     
     while True:
         try:
@@ -64,68 +82,37 @@ async def listen_live_feed():
                         except:
                             continue
 
-                        payload = event_data
+                        # Tüm olası katmanları birleştirip tek bir büyük havuz yapıyoruz
+                        payload = event_data.copy()
                         if "data" in event_data and isinstance(event_data["data"], dict):
-                            payload = event_data["data"]
-                        elif "payload" in event_data and isinstance(event_data["payload"], dict):
-                            payload = event_data["payload"]
+                            payload.update(event_data["data"])
+                        if "payload" in event_data and isinstance(event_data["payload"], dict):
+                            payload.update(event_data["payload"])
 
+                        # Kullanıcı Adı
                         username = (
-                            payload.get("uniqueId") or
-                            payload.get("nickname") or
-                            payload.get("streamer") or 
-                            payload.get("channel") or 
-                            payload.get("username") or 
-                            payload.get("user") or 
-                            payload.get("author") or 
-                            payload.get("name") or 
-                            payload.get("sender") or
-                            event_data.get("uniqueId") or
-                            event_data.get("username") or 
-                            "Bilinmiyor"
+                            payload.get("uniqueId") or payload.get("nickname") or 
+                            payload.get("streamer") or payload.get("channel") or 
+                            payload.get("username") or payload.get("user") or 
+                            payload.get("author") or payload.get("name") or "Bilinmiyor"
                         )
                         
-                        coins_raw = (
-                            payload.get("coins") or 
-                            payload.get("coin") or 
-                            payload.get("amount") or 
-                            payload.get("elmas") or 
-                            payload.get("value") or 
-                            payload.get("diamond") or
-                            payload.get("diamonds") or
-                            payload.get("prize") or
-                            event_data.get("coins") or
-                            "0"
-                        )
-                        
-                        # İzleyici sayısını çeken anahtarlar, ekrandaki gerçek değere (viewers/viewerCount) öncelik verecek şekilde düzenlendi
-                        viewers_raw = (
-                            payload.get("viewerCount") or 
-                            payload.get("viewers") or 
-                            payload.get("totalUser") or
-                            payload.get("participants") or 
-                            payload.get("participantCount") or
-                            payload.get("count") or 
-                            payload.get("userCount") or
-                            payload.get("people") or
-                            event_data.get("viewerCount") or
-                            event_data.get("viewers") or
-                            "0"
-                        )
+                        # --- AKILLI ELMAS TESPİTİ ---
+                        amount = find_value_smart(payload, ["coin", "diamond", "elmas", "amount", "prize", "value", "xu", "jeton"])
+                        if amount is None:
+                            amount = 0
+
+                        # --- AKILLI İZLEYİCİ / KİŞİ TESPİTİ ---
+                        # İngilizce, Türkçe ve Vietnamca tüm olası sayaç terimlerini tarar
+                        people = find_value_smart(payload, ["viewer", "participant", "count", "people", "user", "kisi", "izleyici", "katilimci", "soluong", "nguoi"])
+                        if people is None:
+                            people = 0
 
                         clean_username = str(username).replace("@", "").strip()
-                        
                         if not clean_username or clean_username.lower() == "bilinmiyor":
                             continue
 
-                        try:
-                            amount = float(coins_raw)
-                            people = float(viewers_raw)
-                        except ValueError:
-                            amount = 0
-                            people = 0
-
-                        # Kademeli sınır matrisi
+                        # Kademeli sınır matrisi (Birebir istediğin oranlar)
                         if amount <= 20:
                             max_kisi_izni = 7
                         elif amount <= 30:
@@ -141,12 +128,13 @@ async def listen_live_feed():
                         else:
                             max_kisi_izni = 150
 
+                        # Eğer izleyici sayısı 0 okunduysa veya belirlenen sınırın üzerindeyse eliyoruz
                         if people <= 0 or people > max_kisi_izni:
-                            print(f"⏩ Elendi: @{clean_username} (Elmas: {amount}, Kişi: {people}, Sınır: {max_kisi_izni})")
+                            print(f"⏩ Elendi: @{clean_username} | Elmas: {int(amount)} | Kişi: {int(people)} (Sınır: {max_kisi_izni})")
                             continue
 
                         display_username = f"@{clean_username}"
-                        live_link = payload.get("link") or payload.get("url") or event_data.get("link") or f"https://www.tiktok.com/@{clean_username}/live"
+                        live_link = payload.get("link") or payload.get("url") or f"https://www.tiktok.com/@{clean_username}/live"
 
                         mesaj = (
                             f"🤖 **KADEMELİ FIRSAT!** {SENIN_TELEGRAM_ID}\n\n"
@@ -159,7 +147,7 @@ async def listen_live_feed():
                         )
 
                         send_telegram(mesaj)
-                        print(f"🎯 DOĞRU YAKALANDI: {display_username} (Elmas: {amount}, Kişi: {people})")
+                        print(f"🎯 KESİN VE DOĞRU YAKALANDI: {display_username} (Elmas: {int(amount)}, Kişi: {int(people)})")
 
         except Exception as e:
             print(f"Bağlantı koptu veya hata oluştu: {e}")
