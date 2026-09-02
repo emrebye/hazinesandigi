@@ -6,12 +6,13 @@ import websockets
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from threading import Thread
 import time
+import re
 
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Hyper Fast Bot Active!")
+        self.wfile.write(b"Synced Bot Active!")
 
 def run_dummy_server():
     port = int(os.environ.get("PORT", 8080))
@@ -21,6 +22,10 @@ def run_dummy_server():
 TELEGRAM_BOT_TOKEN = os.getenv("BOT_TOKEN", "8910200072:AAHKi4G2GkhWupvBIfx2KoCruKrmMcTEbYw")
 TELEGRAM_CHAT_ID = os.getenv("CHAT_ID", "5050032521")
 
+# Upstash Ortak Hafıza Bilgileri
+UPSTASH_URL = "https://exotic-javelin-180919.upstash.io"
+UPSTASH_TOKEN = "gQAAAAAAAsK3AAIgcDFmZGQ3Njk5NjBhODQ0MmY3YTIyNThiZTMzYTU4N2M5Yg"
+
 PROXY_URL = "https://dichvu321.com/proxy.php?stream=box&live=1000"
 
 HEADERS = {
@@ -29,9 +34,7 @@ HEADERS = {
     "Referer": "https://dichvu321.com/"
 }
 
-sent_cache = {}
-CACHE_TIMEOUT = 600
-last_cache_cleanup = time.time()
+CACHE_TIMEOUT = 1800  # 30 dakika ortak hafızada tutulur
 
 async def send_telegram_async(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -47,9 +50,27 @@ async def send_telegram_async(text):
             pass
     await asyncio.to_thread(_send)
 
+# Upstash üzerinden ortak hafıza kontrolü ve kayıt
+def check_and_save_cache(cache_key):
+    headers = {"Authorization": f"Bearer {UPSTASH_TOKEN}"}
+    try:
+        # Önce bu anahtar var mı diye bak (GET)
+        res = requests.get(f"{UPSTASH_URL}/get/{cache_key}", headers=headers, timeout=2)
+        data = res.json()
+        
+        # Eğer Upstash'te zaten kayıtlıysa True döndür (Yani daha önce atılmış)
+        if data.get("result") is not None:
+            return True
+            
+        # Kayıtlı değilse, 30 dakika (1800 sn) süreyle Upstash'e set et
+        requests.get(f"{UPSTASH_URL}/set/{cache_key}/1?EX={CACHE_TIMEOUT}", headers=headers, timeout=2)
+        return False
+    except Exception as e:
+        print("Upstash bağlantı hatası:", e)
+        return False
+
 async def listen_live_feed():
-    global last_cache_cleanup
-    print("🚀 ULTRA HIZLI MOD AKTİF")
+    print("🚀 ORTAK BULUT HAFIZALI BOT AKTİF")
     
     while True:
         try:
@@ -90,18 +111,12 @@ async def listen_live_feed():
                         if not clean_username:
                             continue
 
-                        cache_key = clean_username.lower()
+                        cache_key = re.sub(r'[^a-z0-9]', '', clean_username.lower())
 
-                        # Önbellek temizliği artık her mesajda değil, dakikada bir yapılıyor (Hızı uçurur)
-                        current_time = time.time()
-                        if current_time - last_cache_cleanup > 60:
-                            expired = [k for k, t in sent_cache.items() if current_time - t > CACHE_TIMEOUT]
-                            for k in expired:
-                                del sent_cache[k]
-                            last_cache_cleanup = current_time
-
-                        if cache_key in sent_cache:
-                            continue
+                        # ORTAK HAFIZA KONTROLÜ (Termux ve Render buraya soracak)
+                        is_already_sent = await asyncio.to_thread(check_and_save_cache, cache_key)
+                        if is_already_sent:
+                            continue  # Diğer bot zaten atmış, atla!
 
                         room_viewers = payload.get("viewerCount") or payload.get("viewers") or 25
                         chest_people = payload.get("chestUsers") or payload.get("maxUsers") or payload.get("limit") or 15
@@ -117,7 +132,7 @@ async def listen_live_feed():
                         )
 
                         asyncio.create_task(send_telegram_async(mesaj))
-                        sent_cache[cache_key] = current_time
+                        print(f"✅ ORTAK BULUTA YAZILDI VE GÖNDERİLDİ: @{clean_username}")
 
             else:
                 await asyncio.sleep(2)
