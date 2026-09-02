@@ -51,19 +51,18 @@ async def send_telegram_async(text):
 def check_and_save_cache(cache_key):
     headers = {"Authorization": f"Bearer {UPSTASH_TOKEN}", "Content-Type": "application/json"}
     try:
-        # Tekil anahtar kontrolü (Atomik SET NX)
         payload = ["SET", cache_key, "1", "EX", str(CACHE_TIMEOUT), "NX"]
         res = requests.post(UPSTASH_URL, headers=headers, json=payload, timeout=2)
         data = res.json()
         
         if data.get("result") == "OK":
-            return False # İlk defa yakalandı, gönder
-        return True # Daha önce atılmış, engelle
+            return False 
+        return True 
     except Exception as e:
         return False
 
 async def listen_live_feed():
-    print("🚀 JIMIN BOT AKTİF VE VERİ DİNLEMEDE")
+    print("🚀 JIMIN KİŞİ SAYISI FİX AKTİF")
     
     while True:
         try:
@@ -87,7 +86,6 @@ async def listen_live_feed():
                         if "payload" in event_data and isinstance(event_data["payload"], dict):
                             payload.update(event_data["payload"])
 
-                        # Kullanıcı adı
                         username = payload.get("uniqueId") or payload.get("nickname") or payload.get("username") or payload.get("streamer")
                         if not username:
                             continue
@@ -96,7 +94,6 @@ async def listen_live_feed():
                         if not clean_username:
                             continue
 
-                        # Elmas miktarı
                         coins_raw = payload.get("coins") or payload.get("amount") or payload.get("elmas") or payload.get("diamond") or 0
                         try:
                             amount = float(coins_raw)
@@ -106,16 +103,13 @@ async def listen_live_feed():
                         if amount < 10:
                             continue
 
-                        # Nokta ve boşlukları yok eden temiz cache anahtarı
                         cache_key = re.sub(r'[^a-z0-9]', '', clean_username.lower())
-
                         if await asyncio.to_thread(check_and_save_cache, cache_key):
                             continue
 
-                        # İzleyici sayısı
                         room_viewers = payload.get("viewerCount") or payload.get("viewers") or payload.get("totalUserCount") or 0
                         
-                        # Dağıtılan kişi sayısı (Tüm olası alternatif anahtarları tarıyoruz)
+                        # Genişletilmiş Dağıtılan Kişi Taraması
                         chest_people = (
                             payload.get("chestUsers") or 
                             payload.get("maxUsers") or 
@@ -124,7 +118,18 @@ async def listen_live_feed():
                             payload.get("userCount") or 
                             payload.get("users") or 
                             payload.get("count") or
-                            0
+                            payload.get("participantCount") or
+                            payload.get("maxPeople") or
+                            payload.get("chestLimit") or
+                            payload.get("boxLimit") or
+                            payload.get("chestCount") or
+                            payload.get("max_users") or
+                            payload.get("user_limit") or
+                            payload.get("chest_users") or
+                            payload.get("people") or
+                            payload.get("num") or
+                            payload.get("capacity") or
+                            15
                         )
 
                         live_link = payload.get("link") or payload.get("url") or f"https://www.tiktok.com/@{clean_username}/live"
