@@ -41,38 +41,51 @@ def send_telegram(text):
     except Exception as e:
         print("Telegram mesaj hatası:", e)
 
-def get_exact_chest_people(payload):
+def parse_box_data(payload):
     """
-    Yanlış küçük sayaçları ve genel sayaçları atlayarak 
-    sandığın üzerindeki gerçek kişi/izleyici sayısını doğrudan çeker.
+    Yayındaki toplam izleyici ile sandığa dağıtılan kişi sayısını kesin olarak ayrıştırır.
     """
-    # Kesinlikle sandık katılımcı/izleyici sayısını tutan öncelikli anahtarlar
-    priority_keys = ["viewerCount", "viewers", "participantCount", "participants", "userCount"]
-    
-    for key in priority_keys:
-        if key in payload and payload[key] is not None:
+    # 1. Sandığa dağıtılan kişi sınırı (Sandık kontenjanı / slot)
+    chest_keys = ["chestUsers", "maxUsers", "limit", "slot", "boxUserCount", "recipientCount", "max_people", "userCount"]
+    chest_people = None
+    for k in chest_keys:
+        if k in payload and payload[k] is not None:
             try:
-                val = float(payload[key])
+                val = int(payload[k])
                 if val > 0:
-                    return int(val)
+                    chest_people = val
+                    break
+            except:
+            
+                pass
+
+    # Eğer özel anahtar bulunamazsa genel sayıları tarayalım
+    if chest_people is None:
+        for k, v in payload.items():
+            k_lower = str(k).lower()
+            if any(term in k_lower for term in ["chest", "box", "limit", "slot", "recipient"]):
+                try:
+                    val = int(v)
+                    if 0 < val < 500: # Sandık kişi sayıları genelde makul rakamlardır
+                        chest_people = val
+                        break
+                except:
+                    pass
+
+    # 2. Yayındaki toplam izleyici sayısı
+    room_viewers = 0
+    for k in ["viewerCount", "viewers", "roomViewers", "participantCount"]:
+        if k in payload and payload[k] is not None:
+            try:
+                room_viewers = int(payload[k])
+                break
             except:
                 pass
-                
-    # Eğer üsttekiler yoksa içlerinde kelime arayalım ama 'count' kelimesini tek başına başa yazmıyoruz ki yanlış sayıyı almasın
-    for k, v in payload.items():
-        k_lower = str(k).lower()
-        if any(term in k_lower for term in ["viewer", "participant", "kisi", "izleyici"]):
-            try:
-                val = float(v)
-                if val > 0:
-                    return int(val)
-            except:
-                pass
-                
-    return None
+
+    return chest_people, room_viewers
 
 async def listen_live_feed():
-    print("🚀 NET VE DOĞRU KİŞİ OKUMA SİSTEMİ BAŞLATILDI")
+    print("🚀 SANDIK VE ODA KİŞİ AYRIŞTIRMA SİSTEMİ BAŞLATILDI")
     
     while True:
         try:
@@ -118,21 +131,20 @@ async def listen_live_feed():
                         except ValueError:
                             amount = 0
 
-                        # Sandık üzerindeki gerçek kişi sayısı ham olarak çekiliyor
-                        people = get_exact_chest_people(payload)
+                        # Sandığa dağıtılan kişi ve oda izleyicisini net olarak ayırıyoruz
+                        chest_people, room_viewers = parse_box_data(payload)
 
                         clean_username = str(username).replace("@", "").strip()
                         if not clean_username or clean_username.lower() == "bilinmiyor":
                             continue
 
-                        if amount <= 0 or people is None:
+                        if amount <= 0 or chest_people is None:
                             continue
 
-                        # Terminalde ne okuduğunu net görelim
-                        print(f"Kontrol -> Yayıncı: @{clean_username} | Elmas: {int(amount)} | Kişi: {int(people)}")
+                        print(f"Kontrol -> @{clean_username} | Elmas: {int(amount)} | Sandığa Dağıtılan: {chest_people} | Oda İzleyicisi: {room_viewers}")
 
-                        # İsteğin: Ödül yüksek (örn: 20 ve üstü) ama dağıtılan kişi az (örn: 15 ve altı) olduğunda bildir
-                        if amount >= 20 and people <= 15:
+                        # Kriter: Ödül yüksek (örn: 20 ve üstü) VE sandığın dağıtıldığı kişi sayısı az (örn: 15 ve altı)
+                        if amount >= 20 and chest_people <= 15:
                             display_username = f"@{clean_username}"
                             live_link = payload.get("link") or payload.get("url") or f"https://www.tiktok.com/@{clean_username}/live"
 
@@ -141,13 +153,14 @@ async def listen_live_feed():
                                 f"🎁 **HAZİNE SANDIĞI**\n"
                                 f"👤 **YAYINCI:** `{display_username}`\n"
                                 f"💎 **ELMAS:** {int(amount)}\n"
-                                f"👥 **DAĞITILAN:** {int(people)}\n\n"
+                                f"👥 **DAĞITILAN:** {chest_people} KİŞİ\n"
+                                f"👀 **ODA İZLEYİCİSİ:** {room_viewers}\n\n"
                                 f"⚡ **Kaçırma, hemen yayına gir:**\n"
                                 f"{live_link}"
                             )
 
                             send_telegram(mesaj)
-                            print(f"🎯 YAKALANDI VE GÖNDERİLDİ: {display_username} | Elmas: {int(amount)} | Kişi: {int(people)}")
+                            print(f"🎯 YAKALANDI VE GÖNDERİLDİ: {display_username} | Elmas: {int(amount)} | Dağıtılan: {chest_people}")
 
         except Exception as e:
             print(f"Bağlantı koptu veya hata oluştu: {e}")
