@@ -42,21 +42,14 @@ def send_telegram(text):
         print("Telegram mesaj hatası:", e)
 
 def get_exact_viewers(payload):
-    """
-    Yanlış küçük sayıları (9 vb.) eleyip, doğrudan gerçek 
-    izleyici/katılımcı sayısını veren özel öncelikli ayıklayıcı.
-    """
-    # 1. Öncelik: Doğrudan ana izleyici anahtarları
     for key in ["viewerCount", "viewers", "participantCount", "participants", "izleyici", "kisi"]:
         if key in payload:
             try:
-                val = float(payload[get_real_key(payload, key)])
+                val = float(payload[key])
                 if val > 0:
                     return val
             except:
                 pass
-
-    # 2. Öncelik: İçinde 'viewer' veya 'count' geçen en mantıklı sayısal değer
     for k, v in payload.items():
         k_lower = str(k).lower()
         if "viewer" in k_lower or "participant" in k_lower or "people" in k_lower:
@@ -66,18 +59,10 @@ def get_exact_viewers(payload):
                     return val
             except:
                 pass
-                
-    # Bulunamazsa varsayılan olarak yüksek bir değer döndür ki yanlışlıkla bildirim atmasın
     return 9999
 
-def get_real_key(d, target):
-    for k in d.keys():
-        if target.lower() in str(k).lower():
-            return k
-    return target
-
 async def listen_live_feed():
-    print("🚀 DICHVU321 NET VE HASSAS KONTROL BAŞLATILDI")
+    print("🚀 DICHVU321 ORANLI SİSTEM (3 JETON = 1 KİŞİ) BAŞLATILDI")
     
     while True:
         try:
@@ -112,7 +97,6 @@ async def listen_live_feed():
                             payload.get("author") or payload.get("name") or "Bilinmiyor"
                         )
                         
-                        # Elmas Miktarı
                         coins_raw = (
                             payload.get("coins") or payload.get("coin") or 
                             payload.get("amount") or payload.get("elmas") or 
@@ -124,48 +108,37 @@ async def listen_live_feed():
                         except ValueError:
                             amount = 0
 
-                        # Hassas ve doğru izleyici tespiti
                         people = get_exact_viewers(payload)
 
                         clean_username = str(username).replace("@", "").strip()
                         if not clean_username or clean_username.lower() == "bilinmiyor":
                             continue
 
-                        # Kademeli sınır matrisi
-                        if amount <= 20:
-                            max_kisi_izni = 7
-                        elif amount <= 30:
-                            max_kisi_izni = 14
-                        elif amount <= 50:
-                            max_kisi_izni = 22
-                        elif amount <= 100:
-                            max_kisi_izni = 35
-                        elif amount <= 500:
-                            max_kisi_izni = 60
-                        elif amount <= 1000:
-                            max_kisi_izni = 100
-                        else:
-                            max_kisi_izni = 150
+                        if amount <= 0:
+                            continue
+                            
+                        # --- 3 JETON = 1 KİŞİ MATEMATİKSEL ORANI (10.000'e kadar kusursuz) ---
+                        max_kisi_izni = amount / 3.0
 
                         if people <= 0 or people > max_kisi_izni:
-                            print(f"⏩ Elendi: @{clean_username} | Elmas: {int(amount)} | Kişi: {int(people)} (Sınır: {max_kisi_izni})")
+                            print(f"⏩ Elendi: @{clean_username} | Elmas: {int(amount)} | Kişi: {int(people)} (Sınır: {max_kisi_izni:.1f})")
                             continue
 
                         display_username = f"@{clean_username}"
                         live_link = payload.get("link") or payload.get("url") or f"https://www.tiktok.com/@{clean_username}/live"
 
                         mesaj = (
-                            f"🤖 **KADEMELİ FIRSAT!** {SENIN_TELEGRAM_ID}\n\n"
+                            f"🤖 **ORANLI FIRSAT!** {SENIN_TELEGRAM_ID}\n\n"
                             f"🎁 **HAZİNE SANDIĞI**\n"
                             f"👤 **YAYINCI:** `{display_username}`\n"
                             f"💎 **ELMAS:** {int(amount)}\n"
-                            f"👥 **DAĞITILAN:** {int(people)} KİŞİ (Sınır: {max_kisi_izni})\n\n"
+                            f"👥 **DAĞITILAN:** {int(people)} KİŞİ (Max Sınır: {int(max_kisi_izni)})\n\n"
                             f"⚡ **Kaçırma, hemen yayına gir:**\n"
                             f"{live_link}"
                         )
 
                         send_telegram(mesaj)
-                        print(f"🎯 KESİN VE DOĞRU YAKALANDI: {display_username} (Elmas: {int(amount)}, Kişi: {int(people)})")
+                        print(f"🎯 YAKALANDI: {display_username} (Elmas: {int(amount)}, Kişi: {int(people)})")
 
         except Exception as e:
             print(f"Bağlantı koptu veya hata oluştu: {e}")
