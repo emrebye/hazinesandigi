@@ -22,7 +22,6 @@ def run_dummy_server():
 TELEGRAM_BOT_TOKEN = os.getenv("BOT_TOKEN", "8910200072:AAHKi4G2GkhWupvBIfx2KoCruKrmMcTEbYw")
 TELEGRAM_CHAT_ID = os.getenv("CHAT_ID", "5050032521")
 
-# Upstash Ortak Hafıza Bilgileri
 UPSTASH_URL = "https://exotic-javelin-180919.upstash.io"
 UPSTASH_TOKEN = "gQAAAAAAAsK3AAIgcDFmZGQ3Njk5NjBhODQ0MmY3YTIyNThiZTMzYTU4N2M5Yg"
 
@@ -34,7 +33,7 @@ HEADERS = {
     "Referer": "https://dichvu321.com/"
 }
 
-CACHE_TIMEOUT = 1800  # 30 dakika ortak hafızada tutulur
+CACHE_TIMEOUT = 1800
 
 async def send_telegram_async(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -50,27 +49,22 @@ async def send_telegram_async(text):
             pass
     await asyncio.to_thread(_send)
 
-# Upstash üzerinden ortak hafıza kontrolü ve kayıt
 def check_and_save_cache(cache_key):
-    headers = {"Authorization": f"Bearer {UPSTASH_TOKEN}"}
+    headers = {"Authorization": f"Bearer {UPSTASH_TOKEN}", "Content-Type": "application/json"}
     try:
-        # Önce bu anahtar var mı diye bak (GET)
-        res = requests.get(f"{UPSTASH_URL}/get/{cache_key}", headers=headers, timeout=2)
+        res = requests.post(UPSTASH_URL, headers=headers, json=["GET", cache_key], timeout=2)
         data = res.json()
-        
-        # Eğer Upstash'te zaten kayıtlıysa True döndür (Yani daha önce atılmış)
         if data.get("result") is not None:
             return True
-            
-        # Kayıtlı değilse, 30 dakika (1800 sn) süreyle Upstash'e set et
-        requests.get(f"{UPSTASH_URL}/set/{cache_key}/1?EX={CACHE_TIMEOUT}", headers=headers, timeout=2)
+        
+        requests.post(UPSTASH_URL, headers=headers, json=["SET", cache_key, "1", "EX", str(CACHE_TIMEOUT)], timeout=2)
         return False
     except Exception as e:
         print("Upstash bağlantı hatası:", e)
         return False
 
 async def listen_live_feed():
-    print("🚀 ORTAK BULUT HAFIZALI BOT AKTİF")
+    print("🚀 RENDER ORTAK BULUT BOT AKTİF")
     
     while True:
         try:
@@ -113,10 +107,9 @@ async def listen_live_feed():
 
                         cache_key = re.sub(r'[^a-z0-9]', '', clean_username.lower())
 
-                        # ORTAK HAFIZA KONTROLÜ (Termux ve Render buraya soracak)
                         is_already_sent = await asyncio.to_thread(check_and_save_cache, cache_key)
                         if is_already_sent:
-                            continue  # Diğer bot zaten atmış, atla!
+                            continue
 
                         room_viewers = payload.get("viewerCount") or payload.get("viewers") or 25
                         chest_people = payload.get("chestUsers") or payload.get("maxUsers") or payload.get("limit") or 15
@@ -132,7 +125,7 @@ async def listen_live_feed():
                         )
 
                         asyncio.create_task(send_telegram_async(mesaj))
-                        print(f"✅ ORTAK BULUTA YAZILDI VE GÖNDERİLDİ: @{clean_username}")
+                        print(f"✅ BULUTA YAZILDI VE GÖNDERİLDİ: @{clean_username}")
 
             else:
                 await asyncio.sleep(2)
