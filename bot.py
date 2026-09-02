@@ -25,7 +25,7 @@ def run_dummy_server():
     server.serve_forever()
 
 # ============================================================
-# AYARLAR
+# AYARLAR & UPSTASH REDIS ENTEGRASYONU
 # ============================================================
 
 TELEGRAM_BOT_TOKEN = os.getenv(
@@ -54,6 +54,46 @@ HEADERS = {
     "Referer": "https://dichvu321.com/"
 }
 
+# Upstash REST Anahtarları
+UPSTASH_URL = "https://exotic-javelin-180919.upstash.io"
+UPSTASH_TOKEN = "gQAAAAAAAsK3AAIgcDFmZGQ3Njk5NjBhODQ0MmY3YTIyNThiZTMzYTU4N2M5Yg"
+CACHE_TIMEOUT = 1800  # 30 dakika kilit süresi
+
+http_session = requests.Session()
+LOCAL_CACHE = set()
+
+# ============================================================
+# ORTAK KİLİT MEKANİZMASI (DİĞER BOTUN ATTIĞINI ENGELLEME)
+# ============================================================
+
+def is_already_taken_by_other_bot(clean_username):
+    """
+    Diğer bot bu yayıncıyı Upstash'e kilitlediyse True döner.
+    Bu bot o yayıncıyı atmaz, es geçer.
+    """
+    if clean_username in LOCAL_CACHE:
+        return True
+
+    cache_key = f"hazine:{clean_username}"
+    headers = {"Authorization": f"Bearer {UPSTASH_TOKEN}"}
+
+    try:
+        url = f"{UPSTASH_URL}/set/{cache_key}/1/NX/EX/{CACHE_TIMEOUT}"
+        response = http_session.get(url, headers=headers, timeout=2)
+
+        if response.ok:
+            result = response.json().get("result")
+            if result == "OK":
+                # KİLİDİ BİZ ALDIK -> Mesajı bu bot atacak
+                LOCAL_CACHE.add(clean_username)
+                return False
+
+        # Zaten diğer bot kilitledi ('null' döndü) -> MESAJI ATMA
+        return True
+    except Exception as e:
+        print(f"⚠️ Upstash bağlantı hatası: {e}")
+        return True
+
 # ============================================================
 # TELEGRAM
 # ============================================================
@@ -67,7 +107,7 @@ async def send_telegram(message):
     }
     try:
         await asyncio.to_thread(
-            requests.post, url, json=payload, timeout=5
+            http_session.post, url, json=payload, timeout=5
         )
     except Exception as e:
         print(f"⚠️ Telegram hatası: {e}")
@@ -182,14 +222,14 @@ async def listen_live_feed():
     print("=" * 60)
     print("🚀 TREASURE ALERT BAŞLADI")
     print("🎁 HAZİNE SANDIĞI TAKİBİ AKTİF")
-    print("🎯 canOpen + peopleCount araması aktif")
+    print("☁️ UPSTASH PAYLAŞIMLI KİLİT AKTİF")
     print("=" * 60)
     
     while True:
         try:
             print("🔄 Proxy bağlantısı alınıyor...")
             res = await asyncio.to_thread(
-                requests.get, PROXY_URL, headers=HEADERS, timeout=8
+                http_session.get, PROXY_URL, headers=HEADERS, timeout=8
             )
             data = res.json()
             if not data.get("success"):
@@ -244,8 +284,15 @@ async def listen_live_feed():
                         payload.get("nickname") or 
                         payload.get("username") or ""
                     )
-                    clean_username = str(username).replace("@", "").strip()
+                    clean_username = str(username).replace("@", "").strip().lower()
                     if not clean_username:
+                        continue
+
+                    # ------------------------------------------------------------
+                    # BÖLÜŞME KONTROLÜ (Diğer bot attıysa pas geç)
+                    # ------------------------------------------------------------
+                    taken = await asyncio.to_thread(is_already_taken_by_other_bot, clean_username)
+                    if taken:
                         continue
                         
                     coins = (
@@ -283,15 +330,6 @@ async def listen_live_feed():
                     recipients, recipients_path = get_chest_recipients(payload)
                     
                     if recipients is None:
-                        print("\n" + "=" * 60)
-                        print("⚠️ KİŞİ SAYISI BULUNDU BULUNAMADI")
-                        print(f"👤 @{clean_username}")
-                        print(f"💎 Elmas: {coins_number}")
-                        print("\n🔎 İLGİLİ KEY'LER:")
-                        debug_relevant_keys(payload)
-                        print("\n📦 HAM PAYLOAD:")
-                        print(json.dumps(payload, ensure_ascii=False, indent=2))
-                        print("=" * 60 + "\n")
                         recipients_text = "BULUNAMADI"
                     else:
                         recipients_text = f"{recipients} KİŞİ"
