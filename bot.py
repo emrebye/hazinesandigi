@@ -8,11 +8,6 @@ import websockets
 # AYARLAR
 # ============================================================
 
-# Güvenlik nedeniyle Telegram token'ını kodun içine yazmıyoruz.
-# Termux'ta:
-# export BOT_TOKEN="BURAYA_BOT_TOKEN"
-#
-# CHAT_ID mevcut grubun ID'sidir.
 TELEGRAM_BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 CHAT_ID = os.getenv("CHAT_ID", "-1004325133382")
 
@@ -31,14 +26,8 @@ HEADERS = {
 # ETİKET AYARLARI
 # ============================================================
 
-# Sadece:
-#   Elmas >= 100
-#   Dağıtılan kişi <= 5
-# olduğunda @jiminienn etiketlenir.
-
 TAG_COINS_MIN = 100
 TAG_RECIPIENTS_MAX = 5
-
 TAG_USERNAME = "@jiminienn"
 
 # ============================================================
@@ -52,23 +41,11 @@ UPSTASH_URL = os.getenv(
 
 UPSTASH_TOKEN = os.getenv("UPSTASH_TOKEN", "")
 
-CACHE_TIMEOUT = 1800  # 30 dakika
+CACHE_TIMEOUT = 1800
 
 
 def check_and_save_cache(cache_key):
-    """
-    Aynı hazine olayının 30 dakika içinde tekrar gönderilmesini
-    engeller.
-
-    İlk kayıt:
-        False -> gönder
-
-    Daha önce kayıtlı:
-        True -> gönderme
-    """
-
     if not UPSTASH_TOKEN:
-        # Cloud token yoksa cache devre dışı.
         return False
 
     headers = {
@@ -97,14 +74,10 @@ def check_and_save_cache(cache_key):
 
         result = response.json().get("result")
 
-        # OK = ilk kez kaydedildi.
-        # null = zaten vardı.
         return result != "OK"
 
     except Exception as e:
         print(f"⚠️ Upstash cache hatası: {e}")
-
-        # Cloud hata verirse hazineyi kaybetme.
         return False
 
 
@@ -113,10 +86,6 @@ def check_and_save_cache(cache_key):
 # ============================================================
 
 def to_int(value, default=0):
-    """
-    Gelen değeri güvenli şekilde integer'a çevirir.
-    """
-
     if value is None:
         return default
 
@@ -142,17 +111,6 @@ def to_int(value, default=0):
 
 
 def recursive_find_key(obj, wanted_keys):
-    """
-    JSON'un içinde anahtar nerede olursa olsun arar.
-
-    Örneğin:
-        canOpen
-        peopleCount
-        recipientCount
-        participants
-
-    gibi alanları iç içe yapılarda da bulabilir.
-    """
 
     wanted = {
         str(x).lower()
@@ -161,7 +119,6 @@ def recursive_find_key(obj, wanted_keys):
 
     if isinstance(obj, dict):
 
-        # Önce mevcut seviyeyi kontrol et.
         for key, value in obj.items():
 
             if str(key).lower() in wanted:
@@ -171,7 +128,6 @@ def recursive_find_key(obj, wanted_keys):
                 if number is not None:
                     return number
 
-        # Sonra alt yapılara gir.
         for value in obj.values():
 
             found = recursive_find_key(
@@ -198,15 +154,6 @@ def recursive_find_key(obj, wanted_keys):
 
 
 def get_chest_recipients(payload):
-    """
-    Hazineye dağıtılan kişi sayısını bulur.
-
-    canOpen en öncelikli alandır.
-    """
-
-    # --------------------------------------------------------
-    # 1. EN GÜÇLÜ ALAN: canOpen
-    # --------------------------------------------------------
 
     priority_keys = [
         "canOpen",
@@ -227,10 +174,6 @@ def get_chest_recipients(payload):
     if found is not None:
         return found
 
-    # --------------------------------------------------------
-    # 2. ALTERNATİF ALANLAR
-    # --------------------------------------------------------
-
     alternative_keys = [
         "people",
         "participants",
@@ -250,10 +193,6 @@ def get_chest_recipients(payload):
 
 
 def debug_relevant_keys(payload):
-    """
-    Kişi sayısı bulunamadığında terminalde ilgili alanları
-    görmemizi sağlar.
-    """
 
     if not isinstance(payload, dict):
         return
@@ -378,6 +317,8 @@ async def listen_live_feed():
     )
 
     print("🎁 canOpen öncelikli kişi sayısı sistemi AKTİF")
+
+    print("🚫 20 elmas / 16 kişi filtresi AKTİF")
 
     while True:
 
@@ -510,7 +451,6 @@ async def listen_live_feed():
                         0
                     )
 
-                    # 0 veya negatif değerleri geç.
                     if coins_number <= 0:
 
                         continue
@@ -545,6 +485,23 @@ async def listen_live_feed():
                             payload
                         )
                     )
+
+                    # ========================================
+                    # SADECE 20 / 16'YI KALDIR
+                    # ========================================
+
+                    if (
+                        coins_number == 20
+                        and recipients_number == 16
+                    ):
+
+                        print(
+                            f"⏭️ KALDIRILDI: "
+                            f"@{clean_username} "
+                            f"| 20 elmas / 16 kişi"
+                        )
+
+                        continue
 
                     # ========================================
                     # DUPLICATE CACHE
@@ -650,7 +607,10 @@ async def listen_live_feed():
                         f"🔗 {live_link}"
                     )
 
-                    # SADECE ŞART UYUYORSA ETİKET EKLE
+                    # ========================================
+                    # SADECE ŞART UYUYORSA ETİKET
+                    # ========================================
+
                     if should_tag:
 
                         mesaj = (
