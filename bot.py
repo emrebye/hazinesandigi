@@ -11,7 +11,7 @@ class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Bot Active!")
+        self.wfile.write(b"Hyper Fast Bot Active!")
 
 def run_dummy_server():
     port = int(os.environ.get("PORT", 8080))
@@ -30,33 +30,37 @@ HEADERS = {
 }
 
 sent_cache = {}
-CACHE_TIMEOUT = 300
+CACHE_TIMEOUT = 600
+last_cache_cleanup = time.time()
 
-def send_telegram(text):
+async def send_telegram_async(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    try:
-        requests.post(url, json={
-            "chat_id": TELEGRAM_CHAT_ID, 
-            "text": text, 
-            "parse_mode": "Markdown",
-            "disable_web_page_preview": False
-        }, timeout=5)
-    except Exception as e:
-        print("Telegram hata:", e)
+    def _send():
+        try:
+            requests.post(url, json={
+                "chat_id": TELEGRAM_CHAT_ID, 
+                "text": text, 
+                "parse_mode": "Markdown",
+                "disable_web_page_preview": False
+            }, timeout=2)
+        except:
+            pass
+    await asyncio.to_thread(_send)
 
 async def listen_live_feed():
-    print("🚀 SAĞLAMLAŞTIRILMIŞ BOT BAŞLATILDI")
+    global last_cache_cleanup
+    print("🚀 ULTRA HIZLI MOD AKTİF")
     
     while True:
         try:
-            res = requests.get(PROXY_URL, headers=HEADERS, timeout=10)
+            res = await asyncio.to_thread(requests.get, PROXY_URL, headers=HEADERS, timeout=5)
             data = res.json()
 
             if data.get("success"):
                 path = data.get("path")
                 ws_url = f"wss://dichvu321.com{path}"
 
-                async with websockets.connect(ws_url, additional_headers=HEADERS) as websocket:
+                async with websockets.connect(ws_url, additional_headers=HEADERS, ping_interval=None) as websocket:
                     async for message in websocket:
                         try:
                             event_data = json.loads(message)
@@ -69,72 +73,57 @@ async def listen_live_feed():
                         if "payload" in event_data and isinstance(event_data["payload"], dict):
                             payload.update(event_data["payload"])
 
-                        username = payload.get("uniqueId") or payload.get("nickname") or payload.get("username") or payload.get("streamer") or "Bilinmiyor"
-                        coins_raw = payload.get("coins") or payload.get("amount") or payload.get("elmas") or payload.get("diamond") or "0"
-                        
+                        username = payload.get("uniqueId") or payload.get("nickname") or payload.get("username") or payload.get("streamer")
+                        if not username:
+                            continue
+                            
+                        coins_raw = payload.get("coins") or payload.get("amount") or payload.get("elmas") or payload.get("diamond") or 0
                         try:
                             amount = float(coins_raw)
                         except:
                             amount = 0
 
-                        if amount <= 0:
+                        if amount < 10:
                             continue
-
-                        # İzleyici ve dağıtılan kişi sayılarını esnek çekiyoruz (bulamazsa varsayılan veriyor)
-                        room_viewers = 0
-                        for k in ["viewerCount", "viewers", "roomViewers", "participantCount"]:
-                            if k in payload and payload[k] is not None:
-                                try:
-                                    room_viewers = int(payload[k])
-                                    break
-                                except:
-                                    pass
-                        if room_viewers == 0:
-                            room_viewers = 25 # Varsayılan
-
-                        chest_people = 0
-                        for k in ["chestUsers", "maxUsers", "limit", "slot", "boxUserCount", "recipientCount", "userCount"]:
-                            if k in payload and payload[k] is not None:
-                                try:
-                                    chest_people = int(payload[k])
-                                    break
-                                except:
-                                    pass
-                        if chest_people == 0:
-                            chest_people = 15 # Varsayılan
 
                         clean_username = str(username).replace("@", "").strip()
-                        if not clean_username or clean_username.lower() == "bilinmiyor":
+                        if not clean_username:
                             continue
 
-                        # Süre kontrolü (Aynı yayıncıyı 5 dakika içinde tekrar göndermez)
+                        cache_key = clean_username.lower()
+
+                        # Önbellek temizliği artık her mesajda değil, dakikada bir yapılıyor (Hızı uçurur)
                         current_time = time.time()
-                        if clean_username in sent_cache and current_time - sent_cache[clean_username] < CACHE_TIMEOUT:
+                        if current_time - last_cache_cleanup > 60:
+                            expired = [k for k, t in sent_cache.items() if current_time - t > CACHE_TIMEOUT]
+                            for k in expired:
+                                del sent_cache[k]
+                            last_cache_cleanup = current_time
+
+                        if cache_key in sent_cache:
                             continue
 
-                        # İstediğin format ve esnek filtre (Elmas 10 ve üstü)
-                        if amount >= 10:
-                            live_link = payload.get("link") or payload.get("url") or f"https://www.tiktok.com/@{clean_username}/live"
+                        room_viewers = payload.get("viewerCount") or payload.get("viewers") or 25
+                        chest_people = payload.get("chestUsers") or payload.get("maxUsers") or payload.get("limit") or 15
+                        live_link = payload.get("link") or payload.get("url") or f"https://www.tiktok.com/@{clean_username}/live"
 
-                            mesaj = (
-                                f"🎁 **HAZİNE SANDIĞI**\n"
-                                f"👤 **YAYINCI:** `@{clean_username}`\n"
-                                f"👁️ **İZLEYİCİ:** {room_viewers}\n"
-                                f"💎 **ELMAS:** {int(amount)}\n"
-                                f"📦 **DAĞITILAN:** {chest_people} KİŞİ\n"
-                                f"🔗 {live_link}"
-                            )
+                        mesaj = (
+                            f"🎁 **HAZİNE SANDIĞI**\n"
+                            f"👤 **YAYINCI:** `@{clean_username}`\n"
+                            f"👁️ **İZLEYİCİ:** {room_viewers}\n"
+                            f"💎 **ELMAS:** {int(amount)}\n"
+                            f"📦 **DAĞITILAN:** {chest_people} KİŞİ\n"
+                            f"🔗 {live_link}"
+                        )
 
-                            send_telegram(mesaj)
-                            sent_cache[clean_username] = current_time
-                            print(f"✅ GÖNDERİLDİ: @{clean_username} | Elmas: {int(amount)}")
+                        asyncio.create_task(send_telegram_async(mesaj))
+                        sent_cache[cache_key] = current_time
 
             else:
-                await asyncio.sleep(5)
+                await asyncio.sleep(2)
 
         except Exception as e:
-            print(f"Bağlantı hatası: {e}")
-            await asyncio.sleep(5)
+            await asyncio.sleep(2)
 
 if __name__ == "__main__":
     Thread(target=run_dummy_server, daemon=True).start()
