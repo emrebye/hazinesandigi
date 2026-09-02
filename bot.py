@@ -6,10 +6,7 @@ import websockets
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from threading import Thread
 
-# ============================================================
-# DUMMY SERVER (RENDER / PORT TAKİBİ)
-# ============================================================
-
+# Dummy Server (Render Port Takibi)
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -24,72 +21,44 @@ def run_dummy_server():
     server = HTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler)
     server.serve_forever()
 
-# ============================================================
-# AYARLAR & UPSTASH REDIS ENTEGRASYONU
-# ============================================================
-
+# Ayarlar & Upstash Redis Entegrasyonu
 TELEGRAM_BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
-
 PROXY_URL = "https://dichvu321.com/proxy.php?stream=all&live=4000"
 
 HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Linux; Android 10; Mobile) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Mobile Safari/537.36"
-    ),
+    "User-Agent": "Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36",
     "Origin": "https://dichvu321.com",
     "Referer": "https://dichvu321.com/"
 }
 
-# Upstash REST Anahtarları Entegre Edildi
 UPSTASH_URL = os.getenv("UPSTASH_REDIS_REST_URL", "https://exotic-javelin-180919.upstash.io")
 UPSTASH_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN", "gQAAAAAAAsK3AAIgcDFmZGQ3Njk5NjBhODQ0MmY3YTIyNThiZTMzYTU4N2M5Yg")
-CACHE_TIMEOUT = 120  # 2 dakika (120 saniye) kilit süresi
+CACHE_TIMEOUT = 30  # 30 saniye kilit süresi
 
 http_session = requests.Session()
 LOCAL_CACHE = set()
 
-# ============================================================
-# ORTAK KİLİT MEKANİZMASI (DİĞER BOTUN ATTIĞINI ENGELLEME)
-# ============================================================
-
 def is_already_taken_by_other_bot(clean_username):
-    """
-    Diğer bot bu yayıncıyı Upstash'e kilitlediyse True döner.
-    Bu bot o yayıncıyı atmaz, es geçer.
-    """
     if clean_username in LOCAL_CACHE:
         return True
 
     cache_key = f"hazine:{clean_username}"
     headers = {"Authorization": f"Bearer {UPSTASH_TOKEN}"}
-
     try:
         url = f"{UPSTASH_URL}/set/{cache_key}/1/NX/EX/{CACHE_TIMEOUT}"
         response = http_session.get(url, headers=headers, timeout=2)
-
         if response.ok and response.json().get("result") == "OK":
-            # Kilidi biz aldık -> Mesajı bu bot atacak
             LOCAL_CACHE.add(clean_username)
             return False
-
-        # Zaten diğer bot kilitledi ('null' döndü) -> MESAJI ATMA
         return True
     except Exception as e:
         print(f"⚠️ Upstash bağlantı hatası: {e}")
         return False
 
-# ============================================================
-# TELEGRAM BİLDİRİMİ
-# ============================================================
-
 async def send_telegram(message):
     if not TELEGRAM_BOT_TOKEN or not CHAT_ID:
-        print("⚠️ HATA: BOT_TOKEN veya CHAT_ID Render panelinde tanımlı değil!")
         return
-
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": CHAT_ID,
@@ -97,15 +66,9 @@ async def send_telegram(message):
         "disable_web_page_preview": True
     }
     try:
-        await asyncio.to_thread(
-            http_session.post, url, json=payload, timeout=5
-        )
-    except Exception as e:
-        print(f"⚠️ Telegram hatası: {e}")
-
-# ============================================================
-# SAYIYA ÇEVİR & İÇ İÇE KEY ARAMA
-# ============================================================
+        await asyncio.to_thread(http_session.post, url, json=payload, timeout=5)
+    except Exception:
+        pass
 
 def to_int(value):
     try:
@@ -149,22 +112,10 @@ def get_chest_recipients(payload):
             return value, path
     return None, None
 
-# ============================================================
-# CANLI AKIŞ TAKİBİ
-# ============================================================
-
 async def listen_live_feed():
-    print("=" * 60)
-    print("🚀 TREASURE ALERT BAŞLADI")
-    print("🎁 HAZİNE SANDIĞI TAKİBİ AKTİF")
-    print("☁️ UPSTASH PAYLAŞIMLI KİLİT AKTİF (120 sn)")
-    print("=" * 60)
-
     while True:
         try:
-            res = await asyncio.to_thread(
-                http_session.get, PROXY_URL, headers=HEADERS, timeout=8
-            )
+            res = await asyncio.to_thread(http_session.get, PROXY_URL, headers=HEADERS, timeout=8)
             data = res.json()
             if not data.get("success") or not data.get("path"):
                 await asyncio.sleep(1)
@@ -175,7 +126,6 @@ async def listen_live_feed():
             async with websockets.connect(
                 ws_url, additional_headers=HEADERS, ping_interval=15, ping_timeout=8
             ) as websocket:
-                print("✅ WebSocket bağlandı.")
                 async for message in websocket:
                     try:
                         event_data = json.loads(message)
@@ -198,7 +148,6 @@ async def listen_live_feed():
                     if not clean_username:
                         continue
 
-                    # Upstash kilit kontrolü
                     taken = await asyncio.to_thread(is_already_taken_by_other_bot, clean_username)
                     if taken:
                         continue
@@ -214,7 +163,6 @@ async def listen_live_feed():
 
                     level = int(payload.get("level", 0) or 0)
                     box_title = f"🎁 HAZİNE SANDIĞI (Level {level})" if level > 0 else "🎁 HAZİNE SANDIĞI"
-
                     viewers = payload.get("viewerCount") or payload.get("viewers") or payload.get("userCount") or envelope_info.get("viewerCount") or 0
 
                     recipients, _ = get_chest_recipients(payload)
@@ -231,17 +179,8 @@ async def listen_live_feed():
                     )
 
                     asyncio.create_task(send_telegram(mesaj))
-                    print(
-                        f"✅ GÖNDERİLDİ: @{clean_username} | "
-                        f"Elmas: {coins_number} | Kişi: {recipients_text}"
-                    )
         except Exception as e:
-            print(f"⚠️ BAĞLANTI HATASI: {e}")
             await asyncio.sleep(1)
-
-# ============================================================
-# BAŞLAT
-# ============================================================
 
 if __name__ == "__main__":
     Thread(target=run_dummy_server, daemon=True).start()
