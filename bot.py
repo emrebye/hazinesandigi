@@ -46,7 +46,7 @@ HEADERS = {
 # Upstash REST Anahtarları Entegre Edildi
 UPSTASH_URL = os.getenv("UPSTASH_REDIS_REST_URL", "https://exotic-javelin-180919.upstash.io")
 UPSTASH_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN", "gQAAAAAAAsK3AAIgcDFmZGQ3Njk5NjBhODQ0MmY3YTIyNThiZTMzYTU4N2M5Yg")
-CACHE_TIMEOUT = 1800  # 30 dakika kilit süresi
+CACHE_TIMEOUT = 120  # 2 dakika (120 saniye) kilit süresi
 
 http_session = requests.Session()
 LOCAL_CACHE = set()
@@ -79,7 +79,7 @@ def is_already_taken_by_other_bot(clean_username):
         return True
     except Exception as e:
         print(f"⚠️ Upstash bağlantı hatası: {e}")
-        return True
+        return False
 
 # ============================================================
 # TELEGRAM BİLDİRİMİ
@@ -157,7 +157,7 @@ async def listen_live_feed():
     print("=" * 60)
     print("🚀 TREASURE ALERT BAŞLADI")
     print("🎁 HAZİNE SANDIĞI TAKİBİ AKTİF")
-    print("☁️ UPSTASH PAYLAŞIMLI KİLİT AKTİF")
+    print("☁️ UPSTASH PAYLAŞIMLI KİLİT AKTİF (120 sn)")
     print("=" * 60)
 
     while True:
@@ -218,7 +218,7 @@ async def listen_live_feed():
                     viewers = payload.get("viewerCount") or payload.get("viewers") or payload.get("userCount") or envelope_info.get("viewerCount") or 0
 
                     recipients, _ = get_chest_recipients(payload)
-                    recipients_text = f"{recipients} KİŞİ" if recipients is not None else "BULUNAMADI"
+                    recipients_text = f"{recipients} KİŞİ" if recipients is not None else "0 KİŞİ"
                     live_link = f"https://www.tiktok.com/@{clean_username}/live"
 
                     mesaj = (
