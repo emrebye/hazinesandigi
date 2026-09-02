@@ -649,5 +649,3 @@ Thread(
 asyncio.run(  
     listen_live_feed()  
 )
-
-Bunun icine  koy duzenle
