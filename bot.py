@@ -42,27 +42,35 @@ def send_telegram(text):
         print("Telegram mesaj hatası:", e)
 
 def get_exact_viewers(payload):
-    for key in ["viewerCount", "viewers", "participantCount", "participants", "izleyici", "kisi"]:
-        if key in payload:
-            try:
-                val = float(payload[key])
-                if val > 0:
-                    return val
-            except:
-                pass
+    """
+    Yanlış küçük sayaçları eleyip gerçek ve doğru izleyici sayısını bulan gelişmiş fonksiyon.
+    """
+    candidate_values = []
+    
+    # Tüm anahtarları tarayarak içinde 'viewer', 'izleyici', 'count' geçen sayıları topluyoruz
     for k, v in payload.items():
         k_lower = str(k).lower()
-        if "viewer" in k_lower or "participant" in k_lower or "people" in k_lower:
+        if any(term in k_lower for term in ["viewer", "izleyici", "count", "participant", "user"]):
             try:
                 val = float(v)
                 if val > 0:
-                    return val
+                    candidate_values.append(val)
             except:
                 pass
+                
+    # Eğer aday bulunduysa, aralarındaki en mantıklı (gerçek oda büyüklüğünü veren) değeri seçiyoruz
+    if candidate_values:
+        # Genellikle en doğru izleyici sayısı bu adaylar içinde en büyük veya ortalama olandır
+        # Küçük alt sayaçları (örn: 2, 5 gibi) elemek için 0'dan büyük mantıklı rakamlara bakıyoruz
+        valid_ones = [val for val in candidate_values if val > 3]
+        if valid_ones:
+            return max(valid_ones) # En büyük olan gerçek oda izleyicisidir
+        return max(candidate_values)
+        
     return 9999
 
 async def listen_live_feed():
-    print("🚀 DICHVU321 ORANLI SİSTEM (3 JETON = 1 KİŞİ) BAŞLATILDI")
+    print("🚀 DICHVU321 KESİN ÇÖZÜM MODU BAŞLATILDI")
     
     while True:
         try:
@@ -108,6 +116,7 @@ async def listen_live_feed():
                         except ValueError:
                             amount = 0
 
+                        # Doğru ve filtrelenmiş izleyici tespiti
                         people = get_exact_viewers(payload)
 
                         clean_username = str(username).replace("@", "").strip()
@@ -117,11 +126,12 @@ async def listen_live_feed():
                         if amount <= 0:
                             continue
                             
-                        # --- 3 JETON = 1 KİŞİ MATEMATİKSEL ORANI (10.000'e kadar kusursuz) ---
+                        # --- 3 JETON = 1 KİŞİ ORANI ---
                         max_kisi_izni = amount / 3.0
 
+                        print(f"Kontrol: @{clean_username} | Elmas: {int(amount)} | Okunan Kişi: {int(people)} | İzin Verilen Sınır: {max_kisi_izni:.1f}")
+
                         if people <= 0 or people > max_kisi_izni:
-                            print(f"⏩ Elendi: @{clean_username} | Elmas: {int(amount)} | Kişi: {int(people)} (Sınır: {max_kisi_izni:.1f})")
                             continue
 
                         display_username = f"@{clean_username}"
@@ -138,7 +148,7 @@ async def listen_live_feed():
                         )
 
                         send_telegram(mesaj)
-                        print(f"🎯 YAKALANDI: {display_username} (Elmas: {int(amount)}, Kişi: {int(people)})")
+                        print(f"🎯 KESİN YAKALANDI VE GÖNDERİLDİ: {display_username} (Elmas: {int(amount)}, Kişi: {int(people)})")
 
         except Exception as e:
             print(f"Bağlantı koptu veya hata oluştu: {e}")
