@@ -61,8 +61,36 @@ def check_and_save_cache(cache_key):
     except Exception as e:
         return False
 
+def find_chest_people(data):
+    found_values = []
+    
+    def recursive_search(obj):
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                k_lower = str(k).lower()
+                # İzleyici, elmas ve kimlik belirten anahtarları kesinlikle ele
+                if any(skip in k_lower for skip in ['viewer', 'viewers', 'room', 'online', 'total', 'coin', 'amount', 'diamond', 'elmas', 'username', 'uniqueid', 'nickname', 'link', 'url', 'avatar']):
+                    continue
+                # Hedef kelimeleri içeren derin anahtarları tara
+                if any(target in k_lower for target in ['user', 'count', 'people', 'limit', 'participant', 'winner', 'grab', 'claim', 'num', 'kisi', 'kutu']):
+                    try:
+                        val = int(v)
+                        if 3 <= val <= 200: # Mantıklı hazine kişi aralığı
+                            found_values.append(val)
+                    except:
+                        pass
+                recursive_search(v)
+        elif isinstance(obj, list):
+            for item in obj:
+                recursive_search(item)
+                
+    recursive_search(data)
+    if found_values:
+        return found_values[0]
+    return 15
+
 async def listen_live_feed():
-    print("🚀 KİŞİ SAYISI KARIŞMA FIX AKTİF")
+    print("🚀 RECURSIVE DERİN TARAMA AKTİF")
     
     while True:
         try:
@@ -107,25 +135,10 @@ async def listen_live_feed():
                         if await asyncio.to_thread(check_and_save_cache, cache_key):
                             continue
 
-                        # İzleyici sayısı (net olarak alınıyor)
                         room_viewers = payload.get("viewerCount") or payload.get("viewers") or payload.get("totalUserCount") or 0
                         
-                        # Dağıtılan kişi sayısı (İzleyici anahtarları kesinlikle filtreleniyor)
-                        chest_people = 15
-                        for k, v in payload.items():
-                            k_lower = str(k).lower()
-                            # İzleyici belirten kelimeleri kesinlikle ele
-                            if any(v_sub in k_lower for v_sub in ['viewer', 'viewers', 'room', 'online', 'total']):
-                                continue
-                            # Sadece hazine/kutu/limit belirten anahtarları kabul et
-                            if any(sub in k_lower for sub in ['chest', 'limit', 'box', 'maxusers', 'userlimit', 'people', 'kisi', 'kutu']):
-                                try:
-                                    val = int(v)
-                                    if 0 < val < 200:
-                                        chest_people = val
-                                        break
-                                except:
-                                    pass
+                        # ChatGPT'nin önerdiği recursive (iç içe) derin tarama fonksiyonu çağrılıyor
+                        chest_people = find_chest_people(payload)
 
                         live_link = payload.get("link") or payload.get("url") or f"https://www.tiktok.com/@{clean_username}/live"
 
@@ -139,7 +152,7 @@ async def listen_live_feed():
                         )
 
                         asyncio.create_task(send_telegram_async(mesaj))
-                        print(f"✅ GÖNDERİLDİ: @{clean_username} | İzleyici: {room_viewers} | Kişi: {chest_people}")
+                        print(f"✅ GÖNDERİLDİ: @{clean_username} | Kişi: {chest_people}")
 
             else:
                 await asyncio.sleep(2)
