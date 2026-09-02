@@ -41,12 +41,16 @@ def send_telegram(text):
     except Exception as e:
         print("Telegram mesaj hatası:", e)
 
-def get_raw_people_count(payload):
+def get_exact_chest_people(payload):
     """
-    Hiçbir hesaplama yapmadan, JSON içinden doğrudan gerçek kişi/izleyici sayısını çeker.
+    Yanlış küçük sayaçları ve genel sayaçları atlayarak 
+    sandığın üzerindeki gerçek kişi/izleyici sayısını doğrudan çeker.
     """
-    for key in ["userCount", "viewerCount", "viewers", "participantCount", "participants", "kisi", "izleyici", "count"]:
-        if key in payload:
+    # Kesinlikle sandık katılımcı/izleyici sayısını tutan öncelikli anahtarlar
+    priority_keys = ["viewerCount", "viewers", "participantCount", "participants", "userCount"]
+    
+    for key in priority_keys:
+        if key in payload and payload[key] is not None:
             try:
                 val = float(payload[key])
                 if val > 0:
@@ -54,19 +58,21 @@ def get_raw_people_count(payload):
             except:
                 pass
                 
+    # Eğer üsttekiler yoksa içlerinde kelime arayalım ama 'count' kelimesini tek başına başa yazmıyoruz ki yanlış sayıyı almasın
     for k, v in payload.items():
         k_lower = str(k).lower()
-        if any(term in k_lower for term in ["viewer", "count", "participant", "user", "kisi", "izleyici"]):
+        if any(term in k_lower for term in ["viewer", "participant", "kisi", "izleyici"]):
             try:
                 val = float(v)
                 if val > 0:
                     return int(val)
             except:
                 pass
+                
     return None
 
 async def listen_live_feed():
-    print("🚀 HESAPLAMASIZ HAM FIRSAT SİSTEMİ BAŞLATILDI")
+    print("🚀 NET VE DOĞRU KİŞİ OKUMA SİSTEMİ BAŞLATILDI")
     
     while True:
         try:
@@ -112,8 +118,8 @@ async def listen_live_feed():
                         except ValueError:
                             amount = 0
 
-                        # Kişi sayısı ham olarak alınıyor (Asla matematiksel işleme sokulmuyor)
-                        people = get_raw_people_count(payload)
+                        # Sandık üzerindeki gerçek kişi sayısı ham olarak çekiliyor
+                        people = get_exact_chest_people(payload)
 
                         clean_username = str(username).replace("@", "").strip()
                         if not clean_username or clean_username.lower() == "bilinmiyor":
@@ -122,8 +128,10 @@ async def listen_live_feed():
                         if amount <= 0 or people is None:
                             continue
 
-                        # İsteğe bağlı filtre: Örneğin elmas 20 ve üzeriyse VE okunan kişi sayısı 15'ten azsa bildir
-                        # Buradaki sayıları kendi kafana göre değiştirebilirsin
+                        # Terminalde ne okuduğunu net görelim
+                        print(f"Kontrol -> Yayıncı: @{clean_username} | Elmas: {int(amount)} | Kişi: {int(people)}")
+
+                        # İsteğin: Ödül yüksek (örn: 20 ve üstü) ama dağıtılan kişi az (örn: 15 ve altı) olduğunda bildir
                         if amount >= 20 and people <= 15:
                             display_username = f"@{clean_username}"
                             live_link = payload.get("link") or payload.get("url") or f"https://www.tiktok.com/@{clean_username}/live"
@@ -139,9 +147,7 @@ async def listen_live_feed():
                             )
 
                             send_telegram(mesaj)
-                            print(f"🎯 YAKALANDI: {display_username} | Elmas: {int(amount)} | Kişi: {int(people)}")
-                        else:
-                            print(f"⏩ Es geçildi: @{clean_username} | Elmas: {int(amount)} | Kişi: {int(people)}")
+                            print(f"🎯 YAKALANDI VE GÖNDERİLDİ: {display_username} | Elmas: {int(amount)} | Kişi: {int(people)}")
 
         except Exception as e:
             print(f"Bağlantı koptu veya hata oluştu: {e}")
