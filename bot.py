@@ -51,18 +51,20 @@ async def send_telegram_async(text):
 def check_and_save_cache(cache_key):
     headers = {"Authorization": f"Bearer {UPSTASH_TOKEN}", "Content-Type": "application/json"}
     try:
-        res = requests.post(UPSTASH_URL, headers=headers, json=["GET", cache_key], timeout=2)
+        # ATOMİK ÇÖZÜM: SET NX komutu. Sadece veritabanında yoksa ekler ve OK döner. 
+        # Zaten varsa (diğer bot eklediyse) None döner. Çakışma imkansız hale gelir.
+        payload = ["SET", cache_key, "1", "EX", str(CACHE_TIMEOUT), "NX"]
+        res = requests.post(UPSTASH_URL, headers=headers, json=payload, timeout=2)
         data = res.json()
-        if data.get("result") is not None:
-            return True
         
-        requests.post(UPSTASH_URL, headers=headers, json=["SET", cache_key, "1", "EX", str(CACHE_TIMEOUT)], timeout=2)
-        return False
+        if data.get("result") == "OK":
+            return False # İlk defa eklendi, mesajı gönder
+        return True # Zaten eklenmiş (diğer bot hızlı davranmış), engelle
     except Exception as e:
         return False
 
 async def listen_live_feed():
-    print("🚀 NET KİŞİ SAYISI ÇÖZÜMÜ AKTİF")
+    print("🚀 TEKİL MESAJ SİSTEMİ AKTİF")
     
     while True:
         try:
@@ -103,32 +105,26 @@ async def listen_live_feed():
                         if amount < 10:
                             continue
 
+                        # Sadece harf ve rakam bırakıp küçük harfe çevirerek kusursuz anahtar yapıyoruz
                         cache_key = re.sub(r'[^a-z0-9]', '', clean_username.lower())
+
+                        # Çakışma kontrolü
                         is_already_sent = await asyncio.to_thread(check_and_save_cache, cache_key)
                         if is_already_sent:
                             continue
 
                         room_viewers = payload.get("viewerCount") or payload.get("viewers") or payload.get("totalUserCount") or 0
                         
-                        # Kapsamlı Dağıtılan Kişi Taraması
                         raw_people = (
-                            payload.get("userCount") or 
-                            payload.get("users") or 
-                            payload.get("people") or
-                            payload.get("userLimit") or 
-                            payload.get("limit") or 
                             payload.get("chestUsers") or 
                             payload.get("maxUsers") or 
-                            payload.get("count")
+                            payload.get("limit") or 
+                            payload.get("userLimit") or 
+                            payload.get("userCount") or 
+                            payload.get("users") or 
+                            15
                         )
-                        
-                        try:
-                            if raw_people:
-                                chest_people = str(int(raw_people))
-                            else:
-                                chest_people = "?"
-                        except:
-                            chest_people = "?"
+                        chest_people = int(raw_people) if raw_people else 15
 
                         live_link = payload.get("link") or payload.get("url") or f"https://www.tiktok.com/@{clean_username}/live"
 
