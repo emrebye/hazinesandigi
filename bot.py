@@ -29,7 +29,7 @@ def start_health_server():
     server.serve_forever()
 
 # ============================================================
-# AYARLAR VE HTTP SESSION (EN HIZLI BAĞLANTI İÇİN)
+# AYARLAR VE HTTP SESSION
 # ============================================================
 
 TELEGRAM_BOT_TOKEN = os.getenv("BOT_TOKEN", "8910200072:AAHKi4G2GkhWupvBIfx2KoCruKrmMcTEbYw")
@@ -44,28 +44,25 @@ HEADERS = {
 }
 
 # ------------------------------------------------------------
-# UPSTASH REDIS ENTEGRASYONU (SABİTLENMİŞ ANAHTARLAR)
+# UPSTASH REDIS (TERMUX İLE %100 ORTAK KİLİT NOKTASI)
 # ------------------------------------------------------------
 UPSTASH_URL = "https://exotic-javelin-180919.upstash.io"
 UPSTASH_TOKEN = "gQAAAAAAAsK3AAIgcDFmZGQ3Njk5NjBhODQ0MmY3YTIyNThiZTMzYTU4N2M5Yg"
 
-CACHE_TIMEOUT = 1800  # 30 dakika kilit süresi
+CACHE_TIMEOUT = 1800  # 30 dakika (Termux ile aynı olmalı)
 
-# HTTP isteklerini hızlandırmak için kalıcı bağlantı havuzu
 http_session = requests.Session()
-
-# Saniyelik lokal ön bellek (Upstash ağ süresini sıfırlamak için)
 LOCAL_CACHE = set()
 
 # ============================================================
-# ATOMİK UPSTASH KİLİT MEKANİZMASI
+# TERMUX İLE UYUMLU ATOMİK UPSTASH KİLİDİ
 # ============================================================
 
 def check_and_save_cache(cache_key):
     """
-    Upstash Redis üzerinde atomik Set-if-Not-Exists (NX) işlemi yapar.
-    - İlk varan bot 'OK' alır ve False döner (Mesaj atılır).
-    - İkinci varan bot 'null' alır ve True döner (Mesaj engellenir).
+    Termux ve Render bu fonksiyon üzerinden tam senkronize olur.
+    İki taraftan hangisi önce varırsa 'OK' alır ve mesajı atar.
+    Diğeri 'null' alır ve mesajı SESSİZCE İPTAL EDER.
     """
     if cache_key in LOCAL_CACHE:
         return True
@@ -75,20 +72,22 @@ def check_and_save_cache(cache_key):
     }
 
     try:
-        # Tek HTTP GET isteğiyle atomik kilit atma
-        url = f"{UPSTASH_URL}/set/hazine_lock:{cache_key}/1/NX/EX/{CACHE_TIMEOUT}"
+        # Standart REST endpoint formatı
+        url = f"{UPSTASH_URL}/set/{cache_key}/1/NX/EX/{CACHE_TIMEOUT}"
         response = http_session.get(url, headers=headers, timeout=2)
 
         if response.ok:
             result = response.json().get("result")
             if result == "OK":
                 LOCAL_CACHE.add(cache_key)
-                return False  # Kilit başarıyla alındı, mesaja izin ver
+                return False  # Kilit başarıyla alındı -> Telegram'a GÖNDER
 
-        return True  # Zaten kilitli, mesajı engelle
+        # Zaten bulut veritabanında kilitli -> ENGELLE
+        return True
+
     except Exception as e:
-        print(f"⚠️ Upstash Kilit Hatası: {e}")
-        # Hata durumunda çift mesajı engellemek için kilitli sayıyoruz
+        print(f"⚠️ Upstash Kilit Hatası (GitHub/Render): {e}")
+        # Bağlantı koptuğunda çift mesajı önlemek adına kilitli kabul et
         return True
 
 # ============================================================
@@ -120,12 +119,12 @@ async def send_telegram(mesaj):
         return False
 
 # ============================================================
-# CANLI AKIŞ VE DİNLEME
+# CANLI AKIŞ İŞLEME
 # ============================================================
 
 async def listen_live_feed():
-    print("🚀 YÜKSEK HIZLI HAZİNE BOTU BAŞLADI")
-    print("☁️ Upstash Cloud Redis Kilit: AKTİF")
+    print("🚀 GITHUB / RENDER BOTU BAŞLADI")
+    print("☁️ Upstash Senkronizasyonu: AKTİF")
 
     while True:
         try:
@@ -150,7 +149,7 @@ async def listen_live_feed():
                 ping_timeout=5
             ) as websocket:
 
-                print("✅ WebSocket bağlandı - Taranıyor...")
+                print("✅ WebSocket bağlandı - Dinleniyor...")
 
                 async for message in websocket:
                     try:
@@ -162,7 +161,7 @@ async def listen_live_feed():
                     if not isinstance(payload, dict) or payload.get("status") == "connected":
                         continue
 
-                    # Goody bag filtresi
+                    # Goody Bag Filtresi
                     box_type_raw = str(payload.get("type") or "").lower()
                     source_raw = str(payload.get("source") or "").lower()
                     envelope_info = payload.get("envelopeInfo") if isinstance(payload.get("envelopeInfo"), dict) else {}
@@ -170,7 +169,7 @@ async def listen_live_feed():
                     if envelope_info.get("businessType") == 2 or "goody" in box_type_raw or "goody" in source_raw:
                         continue
 
-                    # Elmas filtresi
+                    # Elmas Sayısı
                     try:
                         coins_number = int(payload.get("coins", 0))
                     except Exception:
@@ -179,28 +178,30 @@ async def listen_live_feed():
                     if coins_number <= 0:
                         continue
 
-                    # Yayıncı bilgisi
+                    # Kullanıcı Adı Temizleme
                     username = payload.get("uniqueId") or payload.get("nickname") or payload.get("username") or ""
-                    clean_username = re.sub(r'\s+', '', str(username)).replace("@", "").strip()
+                    clean_username = re.sub(r'\s+', '', str(username)).replace("@", "").strip().lower()
                     if not clean_username:
                         continue
 
-                    # Kişi sayısı
+                    # Dağıtılan Kişi Sayısı
                     try:
                         recipients_number = int(payload.get("canOpen", 0))
                     except Exception:
                         recipients_number = 0
 
                     # ============================================================
-                    # BİREBİR AYNI STANDART REDIS CACHE KEY
+                    # TERMUX İLE BİREBİR ORTAK KEY FORMATI
+                    # (Termux da tam olarak bu isimle kaydetmeli)
                     # ============================================================
-                    cache_key = f"{clean_username.lower()}:{coins_number}"
+                    cache_key = f"hazine:{clean_username}"
 
                     duplicate = await asyncio.to_thread(check_and_save_cache, cache_key)
                     if duplicate:
+                        print(f"⏭️ MÜKERRER (Termux veya Render Tarafından Kilitli): @{clean_username}")
                         continue
 
-                    # Mesaj formatı
+                    # Mesaj İçeriği
                     try:
                         level = int(payload.get("level", 0))
                     except Exception:
@@ -220,10 +221,10 @@ async def listen_live_feed():
                     )
 
                     asyncio.create_task(send_telegram(mesaj))
-                    print(f"✅ GÖNDERİLDİ: @{clean_username} | Elmas: {coins_number} | Kişi: {recipients_number}")
+                    print(f"✅ GÖNDERİLDİ (GitHub/Render): @{clean_username} | Elmas: {coins_number}")
 
         except Exception as e:
-            print(f"⚠️ BAĞLANTI KESİLDİ, YENİDEN BAĞLANILIYOR: {e}")
+            print(f"⚠️ BAĞLANTI HATASI: {e}")
             await asyncio.sleep(0.5)
 
 # ============================================================
