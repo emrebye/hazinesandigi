@@ -44,50 +44,48 @@ HEADERS = {
 }
 
 # ------------------------------------------------------------
-# UPSTASH REDIS (TERMUX İLE %100 ORTAK KİLİT NOKTASI)
+# UPSTASH REDIS (KİLİTLENEN YAYINCILARI BÖLÜŞME NOKTASI)
 # ------------------------------------------------------------
 UPSTASH_URL = "https://exotic-javelin-180919.upstash.io"
 UPSTASH_TOKEN = "gQAAAAAAAsK3AAIgcDFmZGQ3Njk5NjBhODQ0MmY3YTIyNThiZTMzYTU4N2M5Yg"
 
-CACHE_TIMEOUT = 1800  # 30 dakika (Termux ile aynı olmalı)
+CACHE_TIMEOUT = 1800  # 30 dakika kilit
 
 http_session = requests.Session()
 LOCAL_CACHE = set()
 
 # ============================================================
-# TERMUX İLE UYUMLU ATOMİK UPSTASH KİLİDİ
+# YAYINCI KİLİT KONTROLÜ (ÇAKIŞMAYI ENGELLEYİP DİĞERİNE GEÇER)
 # ============================================================
 
-def check_and_save_cache(cache_key):
+def is_already_taken_by_other_bot(clean_username):
     """
-    Termux ve Render bu fonksiyon üzerinden tam senkronize olur.
-    İki taraftan hangisi önce varırsa 'OK' alır ve mesajı atar.
-    Diğeri 'null' alır ve mesajı SESSİZCE İPTAL EDER.
+    Diğer bot bu kullanıcıyı (Örn: Ali) kaptıysa True döner.
+    Böylece Render botu Ali'yi ATMAZ, es geçer ve İsmail'e odaklanır.
     """
-    if cache_key in LOCAL_CACHE:
+    if clean_username in LOCAL_CACHE:
         return True
 
-    headers = {
-        "Authorization": f"Bearer {UPSTASH_TOKEN}"
-    }
+    cache_key = f"hazine:{clean_username}"
+    headers = {"Authorization": f"Bearer {UPSTASH_TOKEN}"}
 
     try:
-        # Standart REST endpoint formatı
+        # Upstash üzerinden atomik SET NX kontrolü
         url = f"{UPSTASH_URL}/set/{cache_key}/1/NX/EX/{CACHE_TIMEOUT}"
         response = http_session.get(url, headers=headers, timeout=2)
 
         if response.ok:
             result = response.json().get("result")
             if result == "OK":
-                LOCAL_CACHE.add(cache_key)
-                return False  # Kilit başarıyla alındı -> Telegram'a GÖNDER
+                # KİLİDİ BİZ ALDIK! Bu yayıncıyı biz atacağız.
+                LOCAL_CACHE.add(clean_username)
+                return False 
 
-        # Zaten bulut veritabanında kilitli -> ENGELLE
+        # 'null' döndüyse -> DİĞER BOT ALMIŞ! Biz bunu geçiyoruz.
         return True
 
     except Exception as e:
-        print(f"⚠️ Upstash Kilit Hatası (GitHub/Render): {e}")
-        # Bağlantı koptuğunda çift mesajı önlemek adına kilitli kabul et
+        print(f"⚠️ Upstash bağlantı hatası: {e}")
         return True
 
 # ============================================================
@@ -96,7 +94,6 @@ def check_and_save_cache(cache_key):
 
 async def send_telegram(mesaj):
     if not TELEGRAM_BOT_TOKEN:
-        print("❌ BOT_TOKEN bulunamadı!")
         return False
 
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -123,8 +120,7 @@ async def send_telegram(mesaj):
 # ============================================================
 
 async def listen_live_feed():
-    print("🚀 GITHUB / RENDER BOTU BAŞLADI")
-    print("☁️ Upstash Senkronizasyonu: AKTİF")
+    print("🚀 AKILLI PAYLAŞIMLI GITHUB BOTU BAŞLADI")
 
     while True:
         try:
@@ -149,7 +145,7 @@ async def listen_live_feed():
                 ping_timeout=5
             ) as websocket:
 
-                print("✅ WebSocket bağlandı - Dinleniyor...")
+                print("✅ WebSocket bağlandı - Boştaki yayıncılar aranıyor...")
 
                 async for message in websocket:
                     try:
@@ -161,7 +157,7 @@ async def listen_live_feed():
                     if not isinstance(payload, dict) or payload.get("status") == "connected":
                         continue
 
-                    # Goody Bag Filtresi
+                    # Goody bag filtresi
                     box_type_raw = str(payload.get("type") or "").lower()
                     source_raw = str(payload.get("source") or "").lower()
                     envelope_info = payload.get("envelopeInfo") if isinstance(payload.get("envelopeInfo"), dict) else {}
@@ -169,7 +165,7 @@ async def listen_live_feed():
                     if envelope_info.get("businessType") == 2 or "goody" in box_type_raw or "goody" in source_raw:
                         continue
 
-                    # Elmas Sayısı
+                    # Elmas filtresi
                     try:
                         coins_number = int(payload.get("coins", 0))
                     except Exception:
@@ -178,38 +174,37 @@ async def listen_live_feed():
                     if coins_number <= 0:
                         continue
 
-                    # Kullanıcı Adı Temizleme
+                    # Yayıncı İsmi
                     username = payload.get("uniqueId") or payload.get("nickname") or payload.get("username") or ""
                     clean_username = re.sub(r'\s+', '', str(username)).replace("@", "").strip().lower()
                     if not clean_username:
                         continue
 
-                    # Dağıtılan Kişi Sayısı
+                    # ============================================================
+                    # YAYINCI BÖLÜŞME KONTROLÜ
+                    # Diğer bot (Ali'yi) aldıysa, bu kod Ali'yi es geçer (continue).
+                    # Diğer botun almadığı (İsmail) gelince onu yakalar ve atar!
+                    # ============================================================
+                    taken = await asyncio.to_thread(is_already_taken_by_other_bot, clean_username)
+                    if taken:
+                        # Diğer bot aldığı için bu yayıncıyı ATMIYORUZ, sıradakine bakıyoruz
+                        continue
+
+                    # Dağıtılan Kişi Sayısı & İzleyici
                     try:
                         recipients_number = int(payload.get("canOpen", 0))
                     except Exception:
                         recipients_number = 0
 
-                    # ============================================================
-                    # TERMUX İLE BİREBİR ORTAK KEY FORMATI
-                    # (Termux da tam olarak bu isimle kaydetmeli)
-                    # ============================================================
-                    cache_key = f"hazine:{clean_username}"
+                    viewers = payload.get("viewerCount") or payload.get("userCount") or envelope_info.get("viewerCount") or 0
+                    live_link = f"https://www.tiktok.com/@{clean_username}/live"
 
-                    duplicate = await asyncio.to_thread(check_and_save_cache, cache_key)
-                    if duplicate:
-                        print(f"⏭️ MÜKERRER (Termux veya Render Tarafından Kilitli): @{clean_username}")
-                        continue
-
-                    # Mesaj İçeriği
                     try:
                         level = int(payload.get("level", 0))
                     except Exception:
                         level = 0
 
                     box_title = f"🎁 HAZİNE SANDIĞI (Level {level})" if level > 0 else "🎁 HAZİNE SANDIĞI"
-                    viewers = payload.get("viewerCount") or payload.get("userCount") or envelope_info.get("viewerCount") or 0
-                    live_link = f"https://www.tiktok.com/@{clean_username}/live"
 
                     mesaj = (
                         f"{box_title}\n"
@@ -221,15 +216,11 @@ async def listen_live_feed():
                     )
 
                     asyncio.create_task(send_telegram(mesaj))
-                    print(f"✅ GÖNDERİLDİ (GitHub/Render): @{clean_username} | Elmas: {coins_number}")
+                    print(f"🎯 DİĞER BOTUN ALMADIĞI YAYINCI YAKALANDI VE ATILDI: @{clean_username}")
 
         except Exception as e:
             print(f"⚠️ BAĞLANTI HATASI: {e}")
             await asyncio.sleep(0.5)
-
-# ============================================================
-# BAŞLAT
-# ============================================================
 
 if __name__ == "__main__":
     threading.Thread(target=start_health_server, daemon=True).start()
