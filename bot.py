@@ -1,954 +1,653 @@
 import asyncio
 import json
 import os
-import threading
 import requests
 import websockets
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from threading import Thread
 
-from http.server import BaseHTTPRequestHandler, HTTPServer
+============================================================
 
+DUMMY SERVER
 
-# ============================================================
-# RENDER HEALTH SERVER
-# ============================================================
+============================================================
 
-class HealthHandler(BaseHTTPRequestHandler):
+class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
 
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-Type", "text/plain")
-        self.end_headers()
-        self.wfile.write(b"OK")
+def do_GET(self):  
+    self.send_response(200)  
+    self.end_headers()  
+    self.wfile.write(b"Jimin Bot Active!")  
 
-    def log_message(self, format, *args):
-        pass
+def log_message(self, format, *args):  
+    pass
 
+def run_dummy_server():
+port = int(os.environ.get("PORT", 8080))
+server = HTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler)
+server.serve_forever()
 
-def start_health_server():
+============================================================
 
-    try:
-        port = int(
-            os.environ.get("PORT", "10000")
-        )
+AYARLAR
 
-        server = HTTPServer(
-            ("0.0.0.0", port),
-            HealthHandler
-        )
+============================================================
 
-        print(
-            f"🌐 Render HTTP server aktif: "
-            f"0.0.0.0:{port}"
-        )
+Öncelik: Environment değişkenleri
 
-        server.serve_forever()
-
-    except Exception as e:
-
-        print(
-            f"❌ HTTP server hatası: {e}"
-        )
-
-
-# ============================================================
-# TELEGRAM
-# ============================================================
+Yoksa mevcut değerleri kullanır.
 
 TELEGRAM_BOT_TOKEN = os.getenv(
-    "BOT_TOKEN",
-    ""
+"BOT_TOKEN",
+"8910200072:AAHKi4G2GkhWupvBIfx2KoCruKrmMcTEbYw"
 )
 
 CHAT_ID = os.getenv(
-    "CHAT_ID",
-    "-1004325133382"
+"CHAT_ID",
+"-1004325133382"
 )
-
-
-# ============================================================
-# PROXY
-# ============================================================
 
 PROXY_URL = (
-    "https://dichvu321.com/"
-    "proxy.php?stream=all&live=4000"
+"https://dichvu321.com/"
+"proxy.php?stream=all&live=4000"
 )
-
 
 HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Linux; Android 10; Mobile) "
-        "AppleWebKit/537.36"
-    ),
-    "Origin": "https://dichvu321.com",
-    "Referer": "https://dichvu321.com/"
+"User-Agent": (
+"Mozilla/5.0 (Linux; Android 10; Mobile) "
+"AppleWebKit/537.36 "
+"(KHTML, like Gecko) "
+"Chrome/120.0.0.0 Mobile Safari/537.36"
+),
+"Origin": "https://dichvu321.com",
+"Referer": "https://dichvu321.com/"
 }
 
+============================================================
 
-# ============================================================
-# ETİKET AYARLARI
-# ============================================================
+TELEGRAM
 
-TAG_USERNAME = "@jiminienn"
+============================================================
 
-TAG_COINS_MIN = 100
+async def send_telegram(message):
 
-TAG_RECIPIENTS_MAX = 5
+url = (  
+    f"https://api.telegram.org/"  
+    f"bot{TELEGRAM_BOT_TOKEN}/sendMessage"  
+)  
 
+payload = {  
+    "chat_id": CHAT_ID,  
+    "text": message,  
+    "disable_web_page_preview": True  
+}  
 
-# ============================================================
-# UPSTASH
-# ============================================================
+try:  
 
-UPSTASH_URL = os.getenv(
-    "UPSTASH_URL",
-    "https://exotic-javelin-180919.upstash.io"
-)
+    await asyncio.to_thread(  
+        requests.post,  
+        url,  
+        json=payload,  
+        timeout=5  
+    )  
 
-UPSTASH_TOKEN = os.getenv(
-    "UPSTASH_TOKEN",
-    ""
-)
+except Exception as e:  
 
-CACHE_TIMEOUT = 1800
+    print(f"⚠️ Telegram hatası: {e}")
 
+============================================================
 
-def check_and_save_cache(cache_key):
+SAYIYA ÇEVİR
 
-    if not UPSTASH_TOKEN:
-        return False
+============================================================
 
-    headers = {
-        "Authorization":
-            f"Bearer {UPSTASH_TOKEN}",
+def to_int(value):
 
-        "Content-Type":
-            "application/json"
-    }
+try:  
 
-    try:
+    if value is None:  
+        return None  
 
-        payload = [
-            "SET",
-            cache_key,
-            "1",
-            "EX",
-            str(CACHE_TIMEOUT),
-            "NX"
-        ]
+    if isinstance(value, bool):  
+        return None  
 
-        response = requests.post(
-            UPSTASH_URL,
-            headers=headers,
-            json=payload,
-            timeout=3
+    number = int(value)  
+
+    if 0 <= number <= 10000:  
+        return number  
+
+except Exception:  
+    pass  
+
+return None
+
+============================================================
+
+İÇ İÇE KEY ARAMA
+
+============================================================
+
+def recursive_find_key(obj, wanted_keys, path=""):
+
+if isinstance(obj, dict):  
+
+    for key, value in obj.items():  
+
+        key_normalized = (  
+            str(key)  
+            .lower()  
+            .replace("_", "")  
+            .replace("-", "")  
+        )  
+
+        current_path = (  
+            f"{path}.{key}"  
+            if path  
+            else str(key)  
+        )  
+
+        if key_normalized in wanted_keys:  
+
+            number = to_int(value)  
+
+            if number is not None:  
+                return number, current_path  
+
+        result = recursive_find_key(  
+            value,  
+            wanted_keys,  
+            current_path  
+        )  
+
+        if result[0] is not None:  
+            return result  
+
+elif isinstance(obj, list):  
+
+    for index, item in enumerate(obj):  
+
+        result = recursive_find_key(  
+            item,  
+            wanted_keys,  
+            f"{path}[{index}]"  
+        )  
+
+        if result[0] is not None:  
+            return result  
+
+return None, None
+
+============================================================
+
+HAZİNE KİŞİ SAYISI
+
+============================================================
+
+def get_chest_recipients(payload):
+
+"""  
+ÖNCELİK SIRASI:  
+
+1. canOpen  
+2. peopleCount  
+3. people_count  
+4. participantCount  
+5. winnerCount  
+6. claimCount  
+7. recipientCount  
+8. grabCount  
+
+Eski botta canOpen kullanılıyordu.  
+Bu nedenle canOpen en yüksek öncelikte.  
+"""  
+
+key_groups = [  
+
+    # Eski yedekte kullanılan gerçek alan  
+    ["canopen"],  
+
+    # TikTok protobuf / JSON varyasyonları  
+    ["peoplecount"],  
+    ["participantcount"],  
+    ["winnercount"],  
+    ["claimcount"],  
+    ["recipientcount"],  
+    ["grabcount"],  
+    ["membercount"],  
+
+    # Diğer varyasyonlar  
+    ["people"],  
+    ["participants"],  
+    ["winners"],  
+    ["recipients"]  
+]  
+
+for wanted_keys in key_groups:  
+
+    value, path = recursive_find_key(  
+        payload,  
+        wanted_keys  
+    )  
+
+    if value is not None:  
+
+        print(  
+            f"🎯 KİŞİ SAYISI BULUNDU: "  
+            f"{value} | KEY: {path}"  
+        )  
+
+        return value, path  
+
+return None, None
+
+============================================================
+
+PAYLOAD İÇİNDEKİ İLGİLİ KEY'LERİ GÖSTER
+
+============================================================
+
+def debug_relevant_keys(obj, path=""):
+
+if isinstance(obj, dict):  
+
+    for key, value in obj.items():  
+
+        current_path = (  
+            f"{path}.{key}"  
+            if path  
+            else str(key)  
+        )  
+
+        key_lower = str(key).lower()  
+
+        if any(word in key_lower for word in [  
+            "open",  
+            "people",  
+            "participant",  
+            "winner",  
+            "claim",  
+            "recipient",  
+            "grab",  
+            "envelope",  
+            "business",  
+            "diamond",  
+            "coin"  
+        ]):  
+
+            print(  
+                f"🔎 {current_path} = {value}"  
+            )  
+
+        debug_relevant_keys(  
+            value,  
+            current_path  
+        )  
+
+elif isinstance(obj, list):  
+
+    for index, item in enumerate(obj):  
+
+        debug_relevant_keys(  
+            item,  
+            f"{path}[{index}]"  
         )
 
-        response.raise_for_status()
+============================================================
 
-        result = response.json().get(
-            "result"
-        )
+CANLI AKIŞ
 
-        return result != "OK"
-
-    except Exception as e:
-
-        print(
-            f"⚠️ Upstash cache hatası: {e}"
-        )
-
-        return False
-
-
-# ============================================================
-# YARDIMCI
-# ============================================================
-
-def to_int(value, default=0):
-
-    if value is None:
-        return default
-
-    try:
-
-        if isinstance(value, bool):
-            return int(value)
-
-        if isinstance(value, int):
-            return value
-
-        if isinstance(value, float):
-            return int(value)
-
-        text = str(value).strip()
-
-        if not text:
-            return default
-
-        return int(float(text))
-
-    except Exception:
-
-        return default
-
-
-# ============================================================
-# RECURSIVE KEY ARAMA
-# ============================================================
-
-def recursive_find_key(
-    obj,
-    wanted_keys
-):
-
-    wanted = {
-        str(x).lower()
-        for x in wanted_keys
-    }
-
-    if isinstance(obj, dict):
-
-        for key, value in obj.items():
-
-            if str(key).lower() in wanted:
-
-                number = to_int(
-                    value,
-                    None
-                )
-
-                if number is not None:
-                    return number
-
-        for value in obj.values():
-
-            found = recursive_find_key(
-                value,
-                wanted_keys
-            )
-
-            if found is not None:
-                return found
-
-    elif isinstance(obj, list):
-
-        for item in obj:
-
-            found = recursive_find_key(
-                item,
-                wanted_keys
-            )
-
-            if found is not None:
-                return found
-
-    return None
-
-
-# ============================================================
-# KİŞİ SAYISI
-# ============================================================
-
-def get_chest_recipients(
-    payload
-):
-
-    priority_keys = [
-
-        "canOpen",
-
-        "peopleCount",
-
-        "participantCount",
-
-        "winnerCount",
-
-        "claimCount",
-
-        "recipientCount",
-
-        "grabCount",
-
-        "memberCount"
-    ]
-
-    found = recursive_find_key(
-        payload,
-        priority_keys
-    )
-
-    if found is not None:
-        return found
-
-    alternative_keys = [
-
-        "people",
-
-        "participants",
-
-        "winners",
-
-        "recipients"
-    ]
-
-    found = recursive_find_key(
-        payload,
-        alternative_keys
-    )
-
-    if found is not None:
-        return found
-
-    return 0
-
-
-# ============================================================
-# TELEGRAM
-# ============================================================
-
-async def send_telegram(
-    mesaj
-):
-
-    if not TELEGRAM_BOT_TOKEN:
-
-        print(
-            "❌ BOT_TOKEN bulunamadı."
-        )
-
-        return
-
-    url = (
-        "https://api.telegram.org/"
-        f"bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    )
-
-    payload = {
-
-        "chat_id": CHAT_ID,
-
-        "text": mesaj,
-
-        "disable_web_page_preview": True
-    }
-
-    try:
-
-        await asyncio.to_thread(
-
-            requests.post,
-
-            url,
-
-            json=payload,
-
-            timeout=5
-        )
-
-    except Exception as e:
-
-        print(
-            f"⚠️ Telegram hatası: {e}"
-        )
-
-
-# ============================================================
-# TIKTOK AKIŞI
-# ============================================================
+============================================================
 
 async def listen_live_feed():
 
-    print(
-        "🚀 HAZİNE BOTU BAŞLADI"
-    )
+print("=" * 60)  
+print("🚀 TREASURE ALERT BAŞLADI")  
+print("🎁 HAZİNE SANDIĞI TAKİBİ AKTİF")  
+print("🎯 canOpen + peopleCount araması aktif")  
+print("=" * 60)  
 
-    print(
-        "🌐 Render health server hazır"
-    )
+while True:  
 
-    print(
-        "🎁 Hazine sistemi aktif"
-    )
+    try:  
 
-    print(
-        "🚫 20 elmas / 16 kişi filtresi AKTİF"
-    )
+        # ------------------------------------------------  
+        # PROXY  
+        # ------------------------------------------------  
 
-    print(
-        f"🏷️ Etiket şartı: "
-        f"{TAG_COINS_MIN}+ elmas / "
-        f"{TAG_RECIPIENTS_MAX} veya az kişi"
-    )
+        print("🔄 Proxy bağlantısı alınıyor...")  
 
-    if UPSTASH_TOKEN:
+        res = await asyncio.to_thread(  
+            requests.get,  
+            PROXY_URL,  
+            headers=HEADERS,  
+            timeout=8  
+        )  
 
-        print(
-            "☁️ Upstash cloud cache AKTİF"
-        )
+        data = res.json()  
 
-    else:
+        if not data.get("success"):  
 
-        print(
-            "⚠️ Upstash token yok - "
-            "cache kapalı"
-        )
+            print("⚠️ Proxy success=false")  
+            await asyncio.sleep(2)  
+            continue  
 
+        path = data.get("path")  
 
-    while True:
+        if not path:  
 
-        try:
+            print("⚠️ Proxy path vermedi.")  
+            await asyncio.sleep(2)  
+            continue  
 
-            # =================================================
-            # PROXY
-            # =================================================
+        ws_url = (  
+            f"wss://dichvu321.com{path}"  
+        )  
 
-            res = await asyncio.to_thread(
+        print(  
+            f"🔌 WebSocket bağlanıyor..."  
+        )  
 
-                requests.get,
+        # ------------------------------------------------  
+        # WEBSOCKET  
+        # ------------------------------------------------  
 
-                PROXY_URL,
+        async with websockets.connect(  
+            ws_url,  
+            additional_headers=HEADERS,  
+            ping_interval=20,  
+            ping_timeout=10  
+        ) as websocket:  
 
-                headers=HEADERS,
+            print("✅ WebSocket bağlandı.")  
 
-                timeout=5
-            )
+            async for message in websocket:  
 
-            data = res.json()
+                try:  
 
-            if not data.get(
-                "success"
-            ):
+                    event_data = json.loads(  
+                        message  
+                    )  
 
-                print(
-                    "⚠️ Proxy success=false"
-                )
+                except Exception:  
+                    continue  
 
-                await asyncio.sleep(1)
+                # ------------------------------------------------  
+                # DATA  
+                # ------------------------------------------------  
 
-                continue
+                if (  
+                    isinstance(event_data, dict)  
+                    and isinstance(  
+                        event_data.get("data"),  
+                        dict  
+                    )  
+                ):  
 
+                    payload = event_data["data"]  
 
-            path = data.get(
-                "path"
-            )
+                else:  
 
-            if not path:
+                    payload = event_data  
 
-                print(
-                    "⚠️ Proxy path bulunamadı"
-                )
+                if not isinstance(payload, dict):  
+                    continue  
 
-                await asyncio.sleep(1)
+                # Bağlantı mesajını geç  
+                if payload.get("status") == "connected":  
+                    continue  
 
-                continue
+                # ------------------------------------------------  
+                # ENVELOPE INFO  
+                # ------------------------------------------------  
 
-
-            ws_url = (
-                f"wss://dichvu321.com{path}"
-            )
-
-
-            # =================================================
-            # WEBSOCKET
-            # =================================================
-
-            async with websockets.connect(
-
-                ws_url,
-
-                additional_headers=HEADERS,
-
-                ping_interval=20,
-
-                ping_timeout=10
-
-            ) as websocket:
-
-                print(
-                    "✅ WebSocket bağlandı"
-                )
-
-
-                async for message in websocket:
-
-                    # =========================================
-                    # JSON
-                    # =========================================
-
-                    try:
-
-                        event_data = json.loads(
-                            message
-                        )
-
-                    except Exception:
-
-                        continue
-
-
-                    # =========================================
-                    # PAYLOAD
-                    # =========================================
-
-                    if isinstance(
-                        event_data.get("data"),
-                        dict
-                    ):
-
-                        payload = (
-                            event_data["data"]
-                        )
-
-                    else:
-
-                        payload = event_data
-
-
-                    if not isinstance(
-                        payload,
-                        dict
-                    ):
-
-                        continue
-
-
-                    if payload.get(
-                        "status"
-                    ) == "connected":
-
-                        continue
-
-
-                    # =========================================
-                    # HAZİNE / GOODY BAG
-                    # =========================================
-
-                    box_type_raw = str(
-
-                        payload.get(
-                            "type"
-                        )
-                        or ""
-
-                    ).lower()
-
-
-                    source_raw = str(
-
-                        payload.get(
-                            "source"
-                        )
-                        or ""
-
-                    ).lower()
-
-
-                    envelope_info = (
-
-                        payload.get(
-                            "envelopeInfo"
-                        )
-                        or {}
-
-                    )
-
-
-                    if not isinstance(
-                        envelope_info,
-                        dict
-                    ):
-
-                        envelope_info = {}
-
-
-                    business_type = (
-
-                        envelope_info.get(
-                            "businessType",
-                            1
-                        )
-
-                    )
-
-
-                    is_goody = (
-
-                        business_type == 2
-
-                        or
-                        "goody" in box_type_raw
-
-                        or
-                        "goody" in source_raw
-                    )
-
-
-                    if is_goody:
-
-                        continue
-
-
-                    # =========================================
-                    # ELMAS
-                    # =========================================
-
-                    coins = to_int(
-
-                        payload.get(
-                            "coins"
-                        ),
-
-                        0
-                    )
-
-
-                    if coins <= 0:
-
-                        continue
-
-
-                    # =========================================
-                    # YAYINCI
-                    # =========================================
-
-                    username = (
-
-                        payload.get(
-                            "uniqueId"
-                        )
-
-                        or
-
-                        payload.get(
-                            "nickname"
-                        )
-
-                        or
-
-                        payload.get(
-                            "username"
-                        )
-
-                        or ""
-
-                    )
-
-
-                    clean_username = (
-
-                        str(username)
-
-                        .replace(
-                            "@",
-                            ""
-                        )
-
-                        .strip()
-
-                    )
-
-
-                    if not clean_username:
-
-                        continue
-
-
-                    # =========================================
-                    # DAĞITILAN KİŞİ
-                    # =========================================
-
-                    recipients = (
-                        get_chest_recipients(
-                            payload
-                        )
-                    )
-
-
-                    # =========================================
-                    # 20 / 16 FİLTRESİ
-                    # =========================================
-
-                    if (
-
-                        coins == 20
-
-                        and
-
-                        recipients == 16
-
-                    ):
-
-                        print(
-
-                            "⏭️ KALDIRILDI → "
-
-                            f"@{clean_username} "
-
-                            "| 20 elmas / 16 kişi"
-
-                        )
-
-                        continue
-
-
-                    # =========================================
-                    # CACHE
-                    # =========================================
-
-                    cache_key = (
-
-                        "treasurealert:"
-
-                        + clean_username.lower()
-
-                        + ":"
-
-                        + str(coins)
-
-                        + ":"
-
-                        + str(recipients)
-
-                    )
-
-
-                    is_duplicate = (
-
-                        await asyncio.to_thread(
-
-                            check_and_save_cache,
-
-                            cache_key
-
-                        )
-
-                    )
-
-
-                    if is_duplicate:
-
-                        print(
-
-                            "⏭️ DUPLICATE/CACHE → "
-
-                            f"@{clean_username} "
-
-                            f"| {coins} elmas "
-
-                            f"| {recipients} kişi"
-
-                        )
-
-                        continue
-
-
-                    # =========================================
-                    # LEVEL
-                    # =========================================
-
-                    level = to_int(
-
-                        payload.get(
-                            "level"
-                        ),
-
-                        0
-                    )
-
-
-                    if level > 0:
-
-                        box_title = (
-
-                            "🎁 HAZİNE SANDIĞI "
-
-                            f"(Level {level})"
-
-                        )
-
-                    else:
-
-                        box_title = (
-                            "🎁 HAZİNE SANDIĞI"
-                        )
-
-
-                    # =========================================
-                    # İZLEYİCİ
-                    # =========================================
-
-                    viewers = (
-
-                        payload.get(
-                            "viewerCount"
-                        )
-
-                        or
-
-                        payload.get(
-                            "userCount"
-                        )
-
-                        or
-
-                        envelope_info.get(
-                            "viewerCount"
-                        )
-
-                        or 0
-
-                    )
-
-
-                    viewers = to_int(
-                        viewers,
-                        0
-                    )
-
-
-                    # =========================================
-                    # CANLI LİNK
-                    # =========================================
-
-                    live_link = (
-
-                        "https://www.tiktok.com/"
-
-                        f"@{clean_username}/live"
-
-                    )
-
-
-                    # =========================================
-                    # ETİKET KARARI
-                    # =========================================
-
-                    should_tag = (
-
-                        coins >= TAG_COINS_MIN
-
-                        and
-
-                        recipients <= TAG_RECIPIENTS_MAX
-
-                    )
-
-
-                    # =========================================
-                    # MESAJ
-                    # =========================================
-
-                    mesaj = (
-
-                        f"{box_title}\n"
-
-                        f"👤 YAYINCI: "
-                        f"@{clean_username}\n"
-
-                        f"👁️ İZLEYİCİ: "
-                        f"{viewers}\n"
-
-                        f"💎 ELMAS: "
-                        f"{coins}\n"
-
-                        f"📦 DAĞITILAN: "
-                        f"{recipients} KİŞİ\n"
-
-                        f"🔗 {live_link}"
-
-                    )
-
-
-                    # =========================================
-                    # SADECE UYGUN HAZİNEDE ETİKET
-                    # =========================================
-
-                    if should_tag:
-
-                        mesaj = (
-
-                            f"🚨 {TAG_USERNAME}\n\n"
-
-                            + mesaj
-
-                        )
-
-                        print(
-
-                            "🚨 ETİKETLİ → "
-
-                            f"@{clean_username} "
-
-                            f"| {coins} elmas "
-
-                            f"| {recipients} kişi"
-
-                        )
-
-                    else:
-
-                        print(
-
-                            "📩 NORMAL → "
-
-                            f"@{clean_username} "
-
-                            f"| {coins} elmas "
-
-                            f"| {recipients} kişi"
-
-                        )
-
-
-                    # =========================================
-                    # TELEGRAM
-                    # =========================================
-
-                    asyncio.create_task(
-
-                        send_telegram(
-                            mesaj
-                        )
-
-                    )
-
-
-        # =====================================================
-        # BAĞLANTI HATASI
-        # =====================================================
-
-        except Exception as e:
-
-            print(
-                f"⚠️ BAĞLANTI HATASI: {e}"
-            )
-
-            await asyncio.sleep(
-                0.5
-            )
-
-
-# ============================================================
-# BAŞLAT
-# ============================================================
-
-if __name__ == "__main__":
-
-    # Render'ın istediği HTTP portunu
-    # ayrı thread'de aç.
-
-    threading.Thread(
-
-        target=start_health_server,
-
-        daemon=True
-
-    ).start()
-
-
-    # Asıl hazine botu.
-
-    asyncio.run(
-        listen_live_feed()
-    )
+                envelope_info = (  
+                    payload.get("envelopeInfo")  
+                    or {}  
+                )  
+
+                if not isinstance(  
+                    envelope_info,  
+                    dict  
+                ):  
+                    envelope_info = {}  
+
+                business_type = (  
+                    envelope_info.get(  
+                        "businessType"  
+                    )  
+                )  
+
+                # ------------------------------------------------  
+                # GOODY BAG FİLTRESİ  
+                # ------------------------------------------------  
+
+                box_type_raw = str(  
+                    payload.get("type") or ""  
+                ).lower()  
+
+                source_raw = str(  
+                    payload.get("source") or ""  
+                ).lower()  
+
+                is_goody = (  
+                    business_type == 2  
+                    or "goody" in box_type_raw  
+                    or "goody" in source_raw  
+                )  
+
+                if is_goody:  
+
+                    print(  
+                        "⏭️ Goody Bag atlandı."  
+                    )  
+
+                    continue  
+
+                # ------------------------------------------------  
+                # USERNAME  
+                # ------------------------------------------------  
+
+                username = (  
+                    payload.get("uniqueId")  
+                    or payload.get("nickname")  
+                    or payload.get("username")  
+                    or ""  
+                )  
+
+                clean_username = (  
+                    str(username)  
+                    .replace("@", "")  
+                    .strip()  
+                )  
+
+                if not clean_username:  
+                    continue  
+
+                # ------------------------------------------------  
+                # ELİMAS  
+                # ------------------------------------------------  
+
+                coins = (  
+                    payload.get("coins")  
+                    or payload.get("amount")  
+                    or payload.get("diamond")  
+                    or payload.get("elmas")  
+                    or 0  
+                )  
+
+                try:  
+                    coins_number = int(coins)  
+                except Exception:  
+                    coins_number = 0  
+
+                # Hazine filtresi  
+                if coins_number < 10:  
+                    continue  
+
+                # ------------------------------------------------  
+                # LEVEL  
+                # ------------------------------------------------  
+
+                level = payload.get(  
+                    "level",  
+                    0  
+                )  
+
+                try:  
+                    level = int(level)  
+                except Exception:  
+                    level = 0  
+
+                if level > 0:  
+
+                    box_title = (  
+                        f"🎁 HAZİNE SANDIĞI "  
+                        f"(Level {level})"  
+                    )  
+
+                else:  
+
+                    box_title = (  
+                        "🎁 HAZİNE SANDIĞI"  
+                    )  
+
+                # ------------------------------------------------  
+                # İZLEYİCİ  
+                # ------------------------------------------------  
+
+                viewers = (  
+                    payload.get("viewerCount")  
+                    or payload.get("viewers")  
+                    or payload.get("userCount")  
+                    or envelope_info.get(  
+                        "viewerCount"  
+                    )  
+                    or 0  
+                )  
+
+                # ------------------------------------------------  
+                # KİŞİ SAYISI  
+                # ------------------------------------------------  
+
+                recipients, recipients_path = (  
+                    get_chest_recipients(  
+                        payload  
+                    )  
+                )  
+
+                # ------------------------------------------------  
+                # KİŞİ SAYISI BULUNAMADIYSA  
+                # ------------------------------------------------  
+
+                if recipients is None:  
+
+                    print("\n" + "=" * 60)  
+                    print(  
+                        "⚠️ KİŞİ SAYISI BULUNAMADI"  
+                    )  
+                    print(  
+                        f"👤 @{clean_username}"  
+                    )  
+                    print(  
+                        f"💎 Elmas: {coins_number}"  
+                    )  
+
+                    print(  
+                        "\n🔎 İLGİLİ KEY'LER:"  
+                    )  
+
+                    debug_relevant_keys(  
+                        payload  
+                    )  
+
+                    print(  
+                        "\n📦 HAM PAYLOAD:"  
+                    )  
+
+                    print(  
+                        json.dumps(  
+                            payload,  
+                            ensure_ascii=False,  
+                            indent=2  
+                        )  
+                    )  
+
+                    print("=" * 60 + "\n")  
+
+                    recipients_text = (  
+                        "BULUNAMADI"  
+                    )  
+
+                else:  
+
+                    recipients_text = (  
+                        f"{recipients} KİŞİ"  
+                    )  
+
+                # ------------------------------------------------  
+                # LINK  
+                # ------------------------------------------------  
+
+                live_link = (  
+                    payload.get("link")  
+                    or payload.get("url")  
+                    or (  
+                        "https://www.tiktok.com/"  
+                        f"@{clean_username}/live"  
+                    )  
+                )  
+
+                # ------------------------------------------------  
+                # TELEGRAM  
+                # ------------------------------------------------  
+
+                mesaj = (  
+                    f"{box_title}\n"  
+                    f"👤 YAYINCI: "  
+                    f"@{clean_username}\n"  
+                    f"👁️ İZLEYİCİ: "  
+                    f"{viewers}\n"  
+                    f"💎 ELMAS: "  
+                    f"{coins_number}\n"  
+                    f"📦 DAĞITILAN: "  
+                    f"{recipients_text}\n"  
+                    f"🔗 {live_link}"  
+                )  
+
+                asyncio.create_task(  
+                    send_telegram(mesaj)  
+                )  
+
+                print(  
+                    f"✅ GÖNDERİLDİ: "  
+                    f"@{clean_username} | "  
+                    f"Elmas: {coins_number} | "  
+                    f"Kişi: {recipients_text}"  
+                )  
+
+    except Exception as e:  
+
+        print(  
+            f"⚠️ BAĞLANTI HATASI: {e}"  
+        )  
+
+        await asyncio.sleep(1)
+
+============================================================
+
+BAŞLAT
+
+============================================================
+
+if name == "main":
+
+Thread(  
+    target=run_dummy_server,  
+    daemon=True  
+).start()  
+
+asyncio.run(  
+    listen_live_feed()  
+)
+
+Bunun icine  koy duzenle
