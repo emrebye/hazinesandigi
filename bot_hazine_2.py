@@ -6,7 +6,7 @@ import websockets
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from threading import Thread
 
-# Render Kapanma Engelleyici (Dummy HTTP Server)
+# Render/UptimeRobot Kapanma Engelleyici (Dummy HTTP Server)
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
