@@ -6,7 +6,7 @@ import websockets
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from threading import Thread
 
-# Render / UptimeRobot Kapanma Engelleyici (Dummy Server)
+# Render/UptimeRobot Kapanma Engelleyici (Dummy Server)
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -34,6 +34,48 @@ HEADERS = {
 
 http_session = requests.Session()
 LOCAL_CACHE = set()
+
+def to_int(value):
+    try:
+        if value is None or isinstance(value, bool):
+            return None
+        number = int(value)
+        if 0 <= number <= 100000:
+            return number
+    except Exception:
+        pass
+    return None
+
+def recursive_find_key(obj, wanted_keys, path=""):
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            key_normalized = str(key).lower().replace("_", "").replace("-", "")
+            current_path = f"{path}.{key}" if path else str(key)
+            if key_normalized in wanted_keys:
+                number = to_int(value)
+                if number is not None:
+                    return number, current_path
+            result = recursive_find_key(value, wanted_keys, current_path)
+            if result[0] is not None:
+                return result
+    elif isinstance(obj, list):
+        for index, item in enumerate(obj):
+            result = recursive_find_key(item, wanted_keys, f"{path}[{index}]")
+            if result[0] is not None:
+                return result
+    return None, None
+
+def get_chest_recipients(payload):
+    key_groups = [
+        ["canopen"], ["peoplecount"], ["participantcount"], ["winnercount"],
+        ["claimcount"], ["recipientcount"], ["grabcount"], ["membercount"],
+        ["people"], ["participants"], ["winners"], ["recipients"], ["peoplecount"]
+    ]
+    for wanted_keys in key_groups:
+        value, path = recursive_find_key(payload, wanted_keys)
+        if value is not None:
+            return value, path
+    return None, None
 
 async def send_telegram(mesaj):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -93,7 +135,7 @@ async def listen_live_feed():
                         if not is_goody:
                             continue
 
-                        # Elmas/Jeton Sayısı Tespiti (Önce Toplam Havuz Değerleri)
+                        # Gerçek Toplam Elmas Sayısını Çekme
                         coins = int(
                             envelope_info.get("totalDiamondCount")
                             or envelope_info.get("diamondCount")
@@ -104,7 +146,7 @@ async def listen_live_feed():
                             or 0
                         )
 
-                        # 50 Elmasın Altındaki Kutuları Filtreleme
+                        # 50 Elmasın Altındaki Kutuları Atla
                         if coins < 50:
                             continue
 
@@ -121,6 +163,10 @@ async def listen_live_feed():
 
                         LOCAL_CACHE.add(clean_username)
 
+                        # Dağıtılan Kişi Sayısını Bulma
+                        recipients, _ = get_chest_recipients(payload)
+                        recipients_text = f"{recipients} KİŞİ" if recipients is not None else "0 KİŞİ"
+
                         viewers = (
                             payload.get("viewerCount")
                             or payload.get("userCount")
@@ -135,11 +181,12 @@ async def listen_live_feed():
                             f"👤 YAYINCI: @{clean_username}\n"
                             f"👁️ İZLEYİCİ: {viewers}\n"
                             f"💎 ELMAS: {coins}\n"
+                            f"📦 DAĞITILAN: {recipients_text}\n"
                             f"🔗 {live_link}"
                         )
 
                         asyncio.create_task(send_telegram(mesaj))
-                        print(f"GOODY: @{clean_username} | Elmas: {coins}")
+                        print(f"GOODY: @{clean_username} | Elmas: {coins} | Dağıtılan: {recipients_text}")
 
         except Exception as e:
             print(f"Bağlantı hatası: {e}")
