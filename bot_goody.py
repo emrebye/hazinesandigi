@@ -74,13 +74,24 @@ def recursive_find_key(obj, wanted_keys, path=""):
     return None, None
 
 def find_country_code(obj):
-    """JSON içinde ülke kodunu derinlemesine arar"""
-    target_keys = {"country", "region", "countrycode", "regioncode", "nation", "geo", "location"}
+    """JSON paketinde ülke/bölge kodunu derinlemesine arar"""
+    target_keys = {
+        "country", "region", "countrycode", "regioncode", "nation", "geo", 
+        "location", "anchorregion", "roomregion", "userregion", "locale", "lang"
+    }
     if isinstance(obj, dict):
         for key, value in obj.items():
             key_normalized = str(key).lower().replace("_", "").replace("-", "")
-            if key_normalized in target_keys and isinstance(value, str) and len(value.strip()) == 2:
-                return value.strip().upper()
+            if key_normalized in target_keys and isinstance(value, str):
+                val_clean = value.strip().upper()
+                # Eğer 'TR', 'US', 'FR' gibi 2 harfli kodsa
+                if len(val_clean) == 2 and val_clean.isalpha():
+                    return val_clean
+                # 'en-US' veya 'tr_TR' gibiyse son 2 harfi al
+                elif len(val_clean) >= 5 and ("-" in val_clean or "_" in val_clean):
+                    parts = val_clean.replace("_", "-").split("-")
+                    if len(parts[-1]) == 2 and parts[-1].isalpha():
+                        return parts[-1]
             res = find_country_code(value)
             if res:
                 return res
@@ -228,15 +239,15 @@ async def listen_live_feed():
                             or 0
                         )
 
-                        # Ülke Kodu Bulma (Derin Arama)
+                        # Ülke Kodu Arama
                         raw_country = find_country_code(event_data)
                         if raw_country:
                             flag = country_to_flag(raw_country)
                             country_text = f"{flag} {raw_country}"
                         else:
-                            country_text = "🌐 Bilinmiyor"
+                            country_text = "🌐 Global"
 
-                        # Geri Sayım Süresi (Timestamp Düzeltmesi)
+                        # Geri Sayım Süresi
                         raw_time = (
                             envelope_info.get("unpackAt")
                             or envelope_info.get("unpackTime")
