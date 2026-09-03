@@ -35,6 +35,13 @@ HEADERS = {
 http_session = requests.Session()
 LOCAL_CACHE = set()
 
+def country_to_flag(country_code):
+    """2 harfli ülke kodunu (ör. TR, US) bayrak emojisine çevirir"""
+    if not country_code or len(country_code) != 2 or not country_code.isalpha():
+        return "🌐"
+    country_code = country_code.upper()
+    return chr(127397 + ord(country_code[0])) + chr(127397 + ord(country_code[1]))
+
 def to_int(value):
     try:
         if value is None or isinstance(value, bool):
@@ -69,13 +76,40 @@ def get_chest_recipients(payload):
     key_groups = [
         ["canopen"], ["peoplecount"], ["participantcount"], ["winnercount"],
         ["claimcount"], ["recipientcount"], ["grabcount"], ["membercount"],
-        ["people"], ["participants"], ["winners"], ["recipients"], ["peoplecount"]
+        ["people"], ["participants"], ["winners"], ["recipients"]
     ]
     for wanted_keys in key_groups:
         value, path = recursive_find_key(payload, wanted_keys)
         if value is not None:
             return value, path
     return None, None
+
+def get_task_type(payload, envelope_info):
+    task_id = (
+        envelope_info.get("conditionType")
+        or payload.get("conditionType")
+        or payload.get("taskType")
+        or 0
+    )
+    
+    if task_id == 1:
+        return "Takip Et"
+    elif task_id == 2:
+        return "Yayın Paylaş"
+    elif task_id == 3:
+        return "Yorum Yap"
+    elif task_id == 4:
+        return "Beğeni / Hediye"
+    
+    condition_text = str(payload.get("condition") or "").lower()
+    if "follow" in condition_text:
+        return "Takip Et"
+    elif "share" in condition_text:
+        return "Yayın Paylaş"
+    elif "comment" in condition_text:
+        return "Yorum Yap"
+
+    return "Şartsız / Serbest"
 
 async def send_telegram(mesaj):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -130,12 +164,12 @@ async def listen_live_feed():
 
                         business_type = envelope_info.get("businessType", 1)
                         
-                        # Sadece Goody Bag Filtresi
+                        # Goody Bag Filtresi
                         is_goody = (business_type == 2 or "goody" in box_type_raw or "goody" in source_raw)
                         if not is_goody:
                             continue
 
-                        # Gerçek Toplam Elmas Sayısını Çekme
+                        # Gerçek Toplam Elmas Sayısı
                         coins = int(
                             envelope_info.get("totalDiamondCount")
                             or envelope_info.get("diamondCount")
@@ -163,10 +197,11 @@ async def listen_live_feed():
 
                         LOCAL_CACHE.add(clean_username)
 
-                        # Dağıtılan Kişi Sayısını Bulma
+                        # Dağıtılan Kişi Sayısı (Sadece Sayı)
                         recipients, _ = get_chest_recipients(payload)
-                        recipients_text = f"{recipients} KİŞİ" if recipients is not None else "0 KİŞİ"
+                        recipients_text = f"{recipients}" if recipients is not None else "Belirtilmemiş"
 
+                        # İzleyici Sayısı
                         viewers = (
                             payload.get("viewerCount")
                             or payload.get("userCount")
@@ -174,19 +209,44 @@ async def listen_live_feed():
                             or 0
                         )
 
+                        # Ülke Kodu ve Bayrak
+                        raw_country = (
+                            payload.get("country")
+                            or payload.get("region")
+                            or envelope_info.get("region")
+                            or ""
+                        ).upper()
+                        
+                        flag = country_to_flag(raw_country)
+                        country_text = f"{flag} {raw_country}" if raw_country else "🌐 Bilinmiyor"
+
+                        # Geri Sayım Süresi
+                        unpack_time = (
+                            envelope_info.get("unpackAt")
+                            or payload.get("delay")
+                            or payload.get("displayDuration")
+                            or 0
+                        )
+                        duration_text = f"{unpack_time} Sn" if unpack_time > 0 else "Bilinmiyor"
+
+                        # Görev Tipi
+                        task_text = get_task_type(payload, envelope_info)
+
                         live_link = f"https://www.tiktok.com/@{clean_username}/live"
 
                         mesaj = (
-                            f"🎁 GOODY BAG (KUTU)\n"
+                            f"🛍️ GOODY BAG (KUTU)\n"
                             f"👤 YAYINCI: @{clean_username}\n"
-                            f"👁️ İZLEYİCİ: {viewers}\n"
                             f"💎 ELMAS: {coins}\n"
-                            f"📦 DAĞITILAN: {recipients_text}\n"
-                            f"🔗 {live_link}"
+                            f"📦 DAĞITILAN: {recipients_text} | 👀 {viewers}\n"
+                            f"📋 GÖREV: {task_text}\n"
+                            f"⏱️ SÜRE: {duration_text}\n"
+                            f"🌍 ÜLKE: {country_text}\n"
+                            f"⚡ {live_link}"
                         )
 
                         asyncio.create_task(send_telegram(mesaj))
-                        print(f"GOODY: @{clean_username} | Elmas: {coins} | Dağıtılan: {recipients_text}")
+                        print(f"GOODY: @{clean_username} | Elmas: {coins} | Ülke: {country_text}")
 
         except Exception as e:
             print(f"Bağlantı hatası: {e}")
