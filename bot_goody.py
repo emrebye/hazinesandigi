@@ -298,7 +298,7 @@ async def listen_live_feed():
 
                         # Mesaj Formatı
                         mesaj_satirlari = [
-                            f"🛍️ GOODY BAG 🏅 Lvl {box_level}",
+                            f"🎁 GOODY BAG 🏅 Lvl {box_level}",
                             f"👤 YAYINCI: @{clean_username}",
                             f"💎 ELMAS: {coins}",
                             f"👥 KAZANAN: {recipients_text} | 👀 {viewers}",
