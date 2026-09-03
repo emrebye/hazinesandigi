@@ -48,7 +48,7 @@ def to_int(value):
     return None
 
 def format_duration(seconds):
-    """Saniyeyi Dakika ve Saniyeye çevirir (ör: 185 -> 3 Dakika 5 Saniye)"""
+    """Saniyeyi Dakika ve Saniyeye çevirir"""
     if seconds <= 0:
         return "Bilinmiyor"
     
@@ -81,8 +81,70 @@ def recursive_find_key(obj, wanted_keys, path=""):
                 return result
     return None, None
 
+def find_task_details(payload, envelope_info):
+    """
+    2 Seçenekli Yapı:
+    1. Seçenek (Kulüp Şartı): Kulübe Katıl OR Katılma Yok
+    2. Seçenek (Eylem Şartı): Yorum Yap / Yayını Paylaş / Takip Et / Özel Yorum Metni
+    """
+    secenek_1 = "Katılma Yok"
+    secenek_2 = "Gereksinim Yok"
+
+    # 1. SEÇENEK (Kulüp Durumu)
+    fan_club = (
+        envelope_info.get("fansClub") 
+        or payload.get("fansClub") 
+        or envelope_info.get("isFanClub")
+    )
+    if fan_club:
+        secenek_1 = "Kulübe Katıl"
+
+    # 2. SEÇENEK (Eylem Şartı Kontrolü)
+    target_text_keys = [
+        "commenttext", "customrequirement", "requirementtext", 
+        "subrequirement", "conditiontext", "displaytext", "word"
+    ]
+    
+    def search_text(obj):
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                k_norm = str(k).lower().replace("_", "").replace("-", "")
+                if k_norm in target_text_keys and isinstance(v, str) and v.strip():
+                    return v.strip()
+                res = search_text(v)
+                if res:
+                    return res
+        elif isinstance(obj, list):
+            for item in obj:
+                res = search_text(item)
+                if res:
+                    return res
+        return None
+
+    custom_text = search_text(envelope_info) or search_text(payload)
+    
+    # Özel yorum metni yazılmışsa öncelikli onu göster
+    if custom_text:
+        secenek_2 = f'"{custom_text}"'
+    else:
+        # Kod tipine göre eylem tespiti
+        task_id = (
+            envelope_info.get("conditionType")
+            or payload.get("conditionType")
+            or payload.get("taskType")
+            or envelope_info.get("displayType")
+            or 0
+        )
+        if task_id in [1, "follow"]:
+            secenek_2 = "Takip Et"
+        elif task_id in [2, "share"]:
+            secenek_2 = "Yayını Paylaş"
+        elif task_id in [3, "comment"]:
+            secenek_2 = "Yorum Yap"
+
+    return f"{secenek_1} | {secenek_2}"
+
 def find_box_level(payload, envelope_info):
-    """Kutunun seviyesini (Level) JSON verisinde arar"""
     level_keys = ["boxlevel", "chestlevel", "envelopelevel", "level", "grade", "rank"]
     for key in level_keys:
         val = envelope_info.get(key) or payload.get(key)
@@ -91,13 +153,12 @@ def find_box_level(payload, envelope_info):
             if num is not None and 1 <= num <= 20:
                 return num
     
-    # Derin arama
     for key in level_keys:
         value, _ = recursive_find_key(payload, [key])
         if value is not None and 1 <= value <= 20:
             return value
             
-    return 1  # Bulunamazsa varsayılan Seviye 1
+    return 1
 
 def get_chest_recipients(payload):
     key_groups = [
@@ -200,6 +261,9 @@ async def listen_live_feed():
                         # Kutu Seviyesi
                         box_level = find_box_level(payload, envelope_info)
 
+                        # 2 Seçenekli Görev Yapısı (Kulüp + Eylem)
+                        task_text = find_task_details(payload, envelope_info)
+
                         # Dağıtılan Kişi Sayısı
                         recipients, _ = get_chest_recipients(payload)
                         recipients_text = f"{recipients}" if recipients is not None else "Belirtilmemiş"
@@ -232,17 +296,21 @@ async def listen_live_feed():
 
                         live_link = f"https://www.tiktok.com/@{clean_username}/live"
 
-                        mesaj = (
-                            f"🛍️ GOODY BAG ⭐ Lvl {box_level}\n"
-                            f"👤 YAYINCI: @{clean_username}\n"
-                            f"💎 ELMAS: {coins}\n"
-                            f"📦 DAĞITILAN: {recipients_text} | 👀 {viewers}\n"
-                            f"⏱️ SÜRE: {duration_text}\n"
+                        # Mesaj Formatı
+                        mesaj_satirlari = [
+                            f"🛍️ GOODY BAG 🏅 Lvl {box_level}",
+                            f"👤 YAYINCI: @{clean_username}",
+                            f"💎 ELMAS: {coins}",
+                            f"👥 KAZANAN: {recipients_text} | 👀 {viewers}",
+                            f"📋 GÖREV: {task_text}",
+                            f"⏱️ SÜRE: {duration_text}",
                             f"⚡ {live_link}"
-                        )
+                        ]
+
+                        mesaj = "\n".join(mesaj_satirlari)
 
                         asyncio.create_task(send_telegram(mesaj))
-                        print(f"GOODY: @{clean_username} | Elmas: {coins} | Seviye: {box_level}")
+                        print(f"GOODY: @{clean_username} | Elmas: {coins} | Görev: {task_text}")
 
         except Exception as e:
             print(f"Bağlantı hatası: {e}")
