@@ -1,6 +1,7 @@
 import os
 import asyncio
 import json
+import time
 import requests
 import websockets
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -71,6 +72,24 @@ def recursive_find_key(obj, wanted_keys, path=""):
             if result[0] is not None:
                 return result
     return None, None
+
+def find_country_code(obj):
+    """JSON içinde ülke kodunu derinlemesine arar"""
+    target_keys = {"country", "region", "countrycode", "regioncode", "nation", "geo", "location"}
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            key_normalized = str(key).lower().replace("_", "").replace("-", "")
+            if key_normalized in target_keys and isinstance(value, str) and len(value.strip()) == 2:
+                return value.strip().upper()
+            res = find_country_code(value)
+            if res:
+                return res
+    elif isinstance(obj, list):
+        for item in obj:
+            res = find_country_code(item)
+            if res:
+                return res
+    return None
 
 def get_chest_recipients(payload):
     key_groups = [
@@ -197,7 +216,7 @@ async def listen_live_feed():
 
                         LOCAL_CACHE.add(clean_username)
 
-                        # Dağıtılan Kişi Sayısı (Sadece Sayı)
+                        # Dağıtılan Kişi Sayısı
                         recipients, _ = get_chest_recipients(payload)
                         recipients_text = f"{recipients}" if recipients is not None else "Belirtilmemiş"
 
@@ -209,25 +228,31 @@ async def listen_live_feed():
                             or 0
                         )
 
-                        # Ülke Kodu ve Bayrak
-                        raw_country = (
-                            payload.get("country")
-                            or payload.get("region")
-                            or envelope_info.get("region")
-                            or ""
-                        ).upper()
-                        
-                        flag = country_to_flag(raw_country)
-                        country_text = f"{flag} {raw_country}" if raw_country else "🌐 Bilinmiyor"
+                        # Ülke Kodu Bulma (Derin Arama)
+                        raw_country = find_country_code(event_data)
+                        if raw_country:
+                            flag = country_to_flag(raw_country)
+                            country_text = f"{flag} {raw_country}"
+                        else:
+                            country_text = "🌐 Bilinmiyor"
 
-                        # Geri Sayım Süresi
-                        unpack_time = (
+                        # Geri Sayım Süresi (Timestamp Düzeltmesi)
+                        raw_time = (
                             envelope_info.get("unpackAt")
+                            or envelope_info.get("unpackTime")
                             or payload.get("delay")
                             or payload.get("displayDuration")
                             or 0
                         )
-                        duration_text = f"{unpack_time} Sn" if unpack_time > 0 else "Bilinmiyor"
+                        
+                        now_ts = int(time.time())
+                        if raw_time > 1000000000:
+                            remaining = raw_time - now_ts
+                            duration_text = f"{remaining} Sn" if 0 < remaining < 3600 else "Bilinmiyor"
+                        elif raw_time > 0:
+                            duration_text = f"{raw_time} Sn"
+                        else:
+                            duration_text = "Bilinmiyor"
 
                         # Görev Tipi
                         task_text = get_task_type(payload, envelope_info)
