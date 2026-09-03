@@ -1,17 +1,17 @@
+import os
 import asyncio
 import json
-import os
 import requests
 import websockets
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from threading import Thread
 
-# Dummy Server (Render Port Takibi)
+# Render/UptimeRobot Kapanma Engelleyici (Dummy HTTP Server)
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Jimin Bot Active!")
+        self.wfile.write(b"Bot Active!")
 
     def log_message(self, format, *args):
         pass
@@ -21,9 +21,9 @@ def run_dummy_server():
     server = HTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler)
     server.serve_forever()
 
-# Ayarlar & Upstash Redis Entegrasyonu
-TELEGRAM_BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
+# Genel Ayarlar
+TELEGRAM_BOT_TOKEN = os.getenv("BOT_TOKEN", "8910200072:AAHKi4G2GkhWupvBIfx2KoCruKrmMcTEbYw")
+CHAT_ID = os.getenv("CHAT_ID", "-1004325133382")
 PROXY_URL = "https://dichvu321.com/proxy.php?stream=all&live=4000"
 
 HEADERS = {
@@ -32,6 +32,7 @@ HEADERS = {
     "Referer": "https://dichvu321.com/"
 }
 
+# Upstash REST Kilit Mekanizması (10 Saniye)
 UPSTASH_URL = os.getenv("UPSTASH_REDIS_REST_URL", "https://exotic-javelin-180919.upstash.io")
 UPSTASH_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN", "gQAAAAAAAsK3AAIgcDFmZGQ3Njk5NjBhODQ0MmY3YTIyNThiZTMzYTU4N2M5Yg")
 CACHE_TIMEOUT = 10  # 10 saniye kilit süresi
@@ -55,20 +56,6 @@ def is_already_taken_by_other_bot(clean_username):
     except Exception as e:
         print(f"⚠️ Upstash bağlantı hatası: {e}")
         return False
-
-async def send_telegram(message):
-    if not TELEGRAM_BOT_TOKEN or not CHAT_ID:
-        return
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": CHAT_ID,
-        "text": message,
-        "disable_web_page_preview": True
-    }
-    try:
-        await asyncio.to_thread(http_session.post, url, json=payload, timeout=5)
-    except Exception:
-        pass
 
 def to_int(value):
     try:
@@ -112,75 +99,122 @@ def get_chest_recipients(payload):
             return value, path
     return None, None
 
+async def send_telegram(mesaj):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": mesaj,
+        "disable_web_page_preview": True
+    }
+    try:
+        await asyncio.to_thread(http_session.post, url, json=payload, timeout=2)
+    except Exception:
+        pass
+
 async def listen_live_feed():
     while True:
         try:
-            res = await asyncio.to_thread(http_session.get, PROXY_URL, headers=HEADERS, timeout=8)
+            res = await asyncio.to_thread(http_session.get, PROXY_URL, headers=HEADERS, timeout=5)
             data = res.json()
-            if not data.get("success") or not data.get("path"):
-                await asyncio.sleep(1)
-                continue
 
-            ws_url = f"wss://dichvu321.com{data.get('path')}"
+            if data.get("success"):
+                path = data.get("path")
+                ws_url = f"wss://dichvu321.com{path}"
 
-            async with websockets.connect(
-                ws_url, additional_headers=HEADERS, ping_interval=15, ping_timeout=8
-            ) as websocket:
-                async for message in websocket:
-                    try:
-                        event_data = json.loads(message)
-                    except Exception:
-                        continue
+                async with websockets.connect(
+                    ws_url,
+                    additional_headers=HEADERS,
+                    ping_interval=20,
+                    ping_timeout=10
+                ) as websocket:
 
-                    payload = event_data.get("data") if isinstance(event_data, dict) and isinstance(event_data.get("data"), dict) else event_data
-                    if not isinstance(payload, dict) or payload.get("status") == "connected":
-                        continue
+                    async for message in websocket:
+                        try:
+                            event_data = json.loads(message)
+                        except Exception:
+                            continue
 
-                    envelope_info = payload.get("envelopeInfo") if isinstance(payload.get("envelopeInfo"), dict) else {}
-                    box_type_raw = str(payload.get("type") or "").lower()
-                    source_raw = str(payload.get("source") or "").lower()
+                        payload = (
+                            event_data.get("data")
+                            if isinstance(event_data.get("data"), dict)
+                            else event_data
+                        )
 
-                    if envelope_info.get("businessType") == 2 or "goody" in box_type_raw or "goody" in source_raw:
-                        continue
+                        if not isinstance(payload, dict) or payload.get("status") == "connected":
+                            continue
 
-                    username = payload.get("uniqueId") or payload.get("nickname") or payload.get("username") or ""
-                    clean_username = str(username).replace("@", "").strip().lower()
-                    if not clean_username:
-                        continue
+                        box_type_raw = str(payload.get("type") or "").lower()
+                        source_raw = str(payload.get("source") or "").lower()
+                        envelope_info = payload.get("envelopeInfo") or {}
 
-                    taken = await asyncio.to_thread(is_already_taken_by_other_bot, clean_username)
-                    if taken:
-                        continue
+                        if not isinstance(envelope_info, dict):
+                            envelope_info = {}
 
-                    coins = payload.get("coins") or payload.get("amount") or payload.get("diamond") or payload.get("elmas") or 0
-                    try:
-                        coins_number = int(coins)
-                    except Exception:
-                        coins_number = 0
+                        business_type = envelope_info.get("businessType", 1)
+                        if business_type == 2 or "goody" in box_type_raw or "goody" in source_raw:
+                            continue
 
-                    if coins_number < 10:
-                        continue
+                        username = (
+                            payload.get("uniqueId")
+                            or payload.get("nickname")
+                            or payload.get("username")
+                            or ""
+                        )
+                        clean_username = str(username).replace("@", "").strip().lower()
 
-                    level = int(payload.get("level", 0) or 0)
-                    box_title = f"🎁 HAZİNE SANDIĞI (Level {level})" if level > 0 else "🎁 HAZİNE SANDIĞI"
-                    viewers = payload.get("viewerCount") or payload.get("viewers") or payload.get("userCount") or envelope_info.get("viewerCount") or 0
+                        if not clean_username:
+                            continue
 
-                    recipients, _ = get_chest_recipients(payload)
-                    recipients_text = f"{recipients} KİŞİ" if recipients is not None else "0 KİŞİ"
-                    live_link = f"https://www.tiktok.com/@{clean_username}/live"
+                        taken = await asyncio.to_thread(is_already_taken_by_other_bot, clean_username)
+                        if taken:
+                            continue
 
-                    mesaj = (
-                        f"{box_title}\n"
-                        f"👤 YAYINCI: @{clean_username}\n"
-                        f"👁️ İZLEYİCİ: {viewers}\n"
-                        f"💎 ELMAS: {coins_number}\n"
-                        f"📦 DAĞITILAN: {recipients_text}\n"
-                        f"🔗 {live_link}"
-                    )
+                        coins = (
+                            payload.get("coins")
+                            or envelope_info.get("diamondCount")
+                            or payload.get("diamondCount")
+                            or 0
+                        )
 
-                    asyncio.create_task(send_telegram(mesaj))
+                        level = payload.get("level", 0)
+                        try:
+                            level = int(level)
+                        except Exception:
+                            level = 0
+
+                        box_title = (
+                            f"🎁 HAZİNE SANDIĞI (Level {level})"
+                            if level > 0
+                            else "🎁 HAZİNE SANDIĞI"
+                        )
+
+                        recipients, _ = get_chest_recipients(payload)
+                        recipients_text = f"{recipients} KİŞİ" if recipients is not None else "0 KİŞİ"
+
+                        viewers = (
+                            payload.get("viewerCount")
+                            or payload.get("userCount")
+                            or envelope_info.get("viewerCount")
+                            or 0
+                        )
+
+                        live_link = f"https://www.tiktok.com/@{clean_username}/live"
+
+                        mesaj = (
+                            f"{box_title}\n"
+                            f"👤 YAYINCI: @{clean_username}\n"
+                            f"👁️ İZLEYİCİ: {viewers}\n"
+                            f"💎 ELMAS: {coins}\n"
+                            f"📦 DAĞITILAN: {recipients_text}\n"
+                            f"🔗 {live_link}"
+                        )
+
+                        asyncio.create_task(send_telegram(mesaj))
+                        print(f"HAZİNE: @{clean_username} | Elmas: {coins} | Dağıtılan: {recipients_text}")
+
         except Exception as e:
-            await asyncio.sleep(1)
+            print(f"Bağlantı hatası: {e}")
+            await asyncio.sleep(0.5)
 
 if __name__ == "__main__":
     Thread(target=run_dummy_server, daemon=True).start()
