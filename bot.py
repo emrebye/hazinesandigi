@@ -34,7 +34,7 @@ HEADERS = {
 
 UPSTASH_URL = os.getenv("UPSTASH_REDIS_REST_URL", "https://exotic-javelin-180919.upstash.io")
 UPSTASH_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN", "gQAAAAAAAsK3AAIgcDFmZGQ3Njk5NjBhODQ0MmY3YTIyNThiZTMzYTU4N2M5Yg")
-CACHE_TIMEOUT = 30  # 30 saniye kilit süresi
+CACHE_TIMEOUT = 10  # 10 saniye kilit süresi
 
 http_session = requests.Session()
 LOCAL_CACHE = set()
