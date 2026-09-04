@@ -22,9 +22,9 @@ def run_dummy_server():
     server = HTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler)
     server.serve_forever()
 
-# Telegram Ayarları
-TELEGRAM_BOT_TOKEN = os.getenv("BOT_TOKEN", "7609507830:AAFFNURagzXkBlrV0eLpnaQ7_y7wOyxONvY")
-CHAT_ID = os.getenv("CHAT_ID", "-1003999489709")
+# Telegram Ayarları (Gizli bilgiler Render ortam değişkenlerinden çekilir)
+TELEGRAM_BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
 PROXY_URL = "https://dichvu321.com/proxy.php?stream=all&live=4000"
 
 HEADERS = {
@@ -110,6 +110,10 @@ def get_chest_recipients(payload):
     return None, None
 
 async def send_telegram(mesaj):
+    if not TELEGRAM_BOT_TOKEN or not CHAT_ID:
+        print("⚠️ Telegram token veya Chat ID eksik!")
+        return
+
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": CHAT_ID,
