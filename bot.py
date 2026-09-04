@@ -21,9 +21,9 @@ def run_dummy_server():
     server = HTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler)
     server.serve_forever()
 
-# Genel Ayarlar
-TELEGRAM_BOT_TOKEN = os.getenv("BOT_TOKEN", "8910200072:AAHKi4G2GkhWupvBIfx2KoCruKrmMcTEbYw")
-CHAT_ID = os.getenv("CHAT_ID", "-1004325133382")
+# Genel Ayarlar (Gizli bilgiler Render ortam değişkenlerinden çekilir)
+TELEGRAM_BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
 PROXY_URL = "https://dichvu321.com/proxy.php?stream=all&live=4000"
 
 HEADERS = {
@@ -32,9 +32,9 @@ HEADERS = {
     "Referer": "https://dichvu321.com/"
 }
 
-# Upstash REST Kilit Mekanizması (10 Saniye)
-UPSTASH_URL = os.getenv("UPSTASH_REDIS_REST_URL", "https://exotic-javelin-180919.upstash.io")
-UPSTASH_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN", "gQAAAAAAAsK3AAIgcDFmZGQ3Njk5NjBhODQ0MmY3YTIyNThiZTMzYTU4N2M5Yg")
+# Upstash REST Kilit Mekanizması
+UPSTASH_URL = os.getenv("UPSTASH_REDIS_REST_URL")
+UPSTASH_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN")
 CACHE_TIMEOUT = 10  # 10 saniye kilit süresi
 
 http_session = requests.Session()
@@ -100,6 +100,10 @@ def get_chest_recipients(payload):
     return None, None
 
 async def send_telegram(mesaj):
+    if not TELEGRAM_BOT_TOKEN or not CHAT_ID:
+        print("⚠️ Telegram token veya Chat ID eksik!")
+        return
+        
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": CHAT_ID,
