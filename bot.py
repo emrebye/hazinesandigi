@@ -165,16 +165,20 @@ async def listen_live_feed():
                         if not clean_username:
                             continue
 
-                        taken = await asyncio.to_thread(is_already_taken_by_other_bot, clean_username)
-                        if taken:
-                            continue
-
-                        coins = (
+                        coins = int(
                             payload.get("coins")
                             or envelope_info.get("diamondCount")
                             or payload.get("diamondCount")
                             or 0
                         )
+
+                        # 50 Elmasın Altındaki Kutuları Atla
+                        if coins < 50:
+                            continue
+
+                        taken = await asyncio.to_thread(is_already_taken_by_other_bot, clean_username)
+                        if taken:
+                            continue
 
                         level = payload.get("level", 0)
                         try:
