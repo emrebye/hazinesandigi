@@ -10,6 +10,7 @@ from threading import Thread
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
+# Render Canlı Tutan Dummy HTTP Sunucusu
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -28,19 +29,14 @@ TELEGRAM_BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 LIVE_CAPACITY = os.getenv("LIVE_CAPACITY", "1000")
 
+PAGE_URL = "https://dichvu321.com/en/tiktok-treasure-box-bot/"
 BOOTSTRAP_URL = f"https://dichvu321.com/proxy.php?transport=ws&mode=bootstrap&stream=box&live={LIVE_CAPACITY}"
-
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-    "Origin": "https://dichvu321.com",
-    "Referer": "https://dichvu321.com/en/tiktok-treasure-box-bot/",
-    "Accept": "application/json"
-}
 
 UPSTASH_URL = os.getenv("UPSTASH_REDIS_REST_URL")
 UPSTASH_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN")
 CACHE_TIMEOUT = 15
 
+# Oturum ve Çerez Yönetimi
 http_session = requests.Session()
 LOCAL_CACHE = {}
 
@@ -128,12 +124,36 @@ async def send_telegram(mesaj):
         logging.error(f"Telegram Gönderim Hatası: {e}")
 
 def get_websocket_url():
+    """Önce ana sayfayı ziyaret edip çerez alır, ardından bilet ister."""
     try:
-        # POST isteği gönderiliyor
-        res = http_session.post(BOOTSTRAP_URL, headers=HEADERS, timeout=10)
-        logging.info(f"Site Yanıt Kodu (POST): HTTP {res.status_code}")
-        
+        # 1. Adım: Ana Sayfayı Ziyaret Et (Oturum Çerezi Oluştur)
+        page_headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9"
+        }
+        http_session.get(PAGE_URL, headers=page_headers, timeout=10)
+
+        # 2. Adım: Bilet İsteği Gönder (Browser/AJAX Başlıklarıyla)
+        ajax_headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+            "Origin": "https://dichvu321.com",
+            "Referer": PAGE_URL,
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "X-Requested-With": "XMLHttpRequest",
+            "Sec-Fetch-Dest": "empty",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "same-origin"
+        }
+
+        res = http_session.get(BOOTSTRAP_URL, headers=ajax_headers, timeout=10)
         data = res.json()
+
+        if not data.get("success"):
+            # POST Denemesi
+            res = http_session.post(BOOTSTRAP_URL, headers=ajax_headers, timeout=10)
+            data = res.json()
+
         if data.get("success"):
             path = data.get("path", "").replace("\\/", "/")
             return f"wss://dichvu321.com{path}"
@@ -152,10 +172,14 @@ async def listen_live_feed():
             continue
 
         logging.info("WebSocket bağlantısı kuruluyor...")
+        ws_headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+            "Origin": "https://dichvu321.com"
+        }
         try:
             async with websockets.connect(
                 ws_url,
-                additional_headers=HEADERS,
+                additional_headers=ws_headers,
                 ping_interval=20,
                 ping_timeout=10
             ) as websocket:
