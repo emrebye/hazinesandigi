@@ -36,10 +36,11 @@ def run_dummy_server():
 TELEGRAM_BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 LIVE_CAPACITY = os.getenv("LIVE_CAPACITY", "1000")
-MIN_COINS = int(os.getenv("MIN_COINS", "10"))  # Minimum elmas sınırı 10'a indirildi
+MIN_COINS = int(os.getenv("MIN_COINS", "10"))
 
 PAGE_URL = "https://dichvu321.com/en/tiktok-treasure-box-bot/"
-BOOTSTRAP_URL = f"https://dichvu321.com/proxy.php?transport=ws&mode=bootstrap&stream=box&live={LIVE_CAPACITY}"
+# stream=box yerine sitenin kullandığı stream=all parametresi eklendi
+BOOTSTRAP_URL = f"https://dichvu321.com/proxy.php?transport=ws&mode=bootstrap&stream=all&live={LIVE_CAPACITY}"
 
 UPSTASH_URL = os.getenv("UPSTASH_REDIS_REST_URL")
 UPSTASH_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN")
@@ -158,11 +159,11 @@ def get_websocket_ticket():
             cookie_str = "; ".join([f"{k}={v}" for k, v in cookies.items()])
             return ws_url, cookie_str, user_agent
     except Exception as e:
-        logging.error(f"Bilet bilet alma hatası: {e}")
+        logging.error(f"Bilet alma hatası: {e}")
     return None, None, None
 
 async def listen_live_feed():
-    await send_telegram("🤖 <b>Bot Çalıştı!</b> Akış dinleniyor...")
+    await send_telegram("🤖 <b>Bot Güncellendi!</b> (stream=all) Canlı akış dinleniyor...")
 
     while True:
         ws_url, cookie_str, user_agent = await asyncio.to_thread(get_websocket_ticket)
@@ -218,8 +219,10 @@ async def listen_live_feed():
                     if taken:
                         continue
 
+                    box_type = str(payload.get("type") or "HAZİNE SANDIĞI").upper()
                     level = payload.get("level", 0)
-                    box_title = f"🎁 <b>HAZİNE SANDIĞI</b> (Level {level})" if level else "🎁 <b>HAZİNE SANDIĞI</b>"
+                    box_title = f"🎁 <b>{box_type}</b> (Level {level})" if level else f"🎁 <b>{box_type}</b>"
+                    
                     recipients = extract_recipients(payload)
                     recipients_text = f"{recipients} KİŞİ" if recipients > 0 else "Belirtilmedi"
                     viewers = payload.get("viewers", payload.get("viewerCount", 0))
