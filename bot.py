@@ -19,7 +19,6 @@ except ImportError:
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# Render Canlı Tutan Dummy HTTP Sunucusu
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -114,7 +113,7 @@ def extract_recipients(data):
 
 async def send_telegram(mesaj):
     if not TELEGRAM_BOT_TOKEN or not CHAT_ID:
-        logging.error("Telegram BOT_TOKEN veya CHAT_ID eksik!")
+        logging.error("❌ Telegram BOT_TOKEN veya CHAT_ID eksik! Render Environment variables ayarlarını kontrol edin.")
         return
 
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -127,9 +126,11 @@ async def send_telegram(mesaj):
     try:
         res = await asyncio.to_thread(http_session.post, url, json=payload, timeout=5)
         if not res.ok:
-            logging.error(f"Telegram API Hatası: {res.status_code} - {res.text}")
+            logging.error(f"❌ Telegram API Hatası: {res.status_code} - {res.text}")
+        else:
+            logging.info("✅ Telegram mesajı başarıyla iletildi.")
     except Exception as e:
-        logging.error(f"Telegram Gönderim Hatası: {e}")
+        logging.error(f"❌ Telegram Gönderim Hatası: {e}")
 
 def get_websocket_ticket():
     try:
@@ -143,10 +144,7 @@ def get_websocket_ticket():
             "Origin": "https://dichvu321.com",
             "Referer": PAGE_URL,
             "Accept": "application/json, text/javascript, */*; q=0.01",
-            "X-Requested-With": "XMLHttpRequest",
-            "Sec-Fetch-Dest": "empty",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Site": "same-origin"
+            "X-Requested-With": "XMLHttpRequest"
         }
 
         res = client.get(BOOTSTRAP_URL, headers=headers, timeout=10)
@@ -154,32 +152,27 @@ def get_websocket_ticket():
         if res.status_code != 200 or not res.text.strip().startswith("{"):
             res = client.post(BOOTSTRAP_URL, headers=headers, timeout=10)
 
-        logging.info(f"Site Yanıt Kodu: {res.status_code} | Yanıt: {res.text[:150]}")
-
         data = res.json()
         if data.get("success"):
             path = data.get("path", "").replace("\\/", "/")
             ws_url = f"wss://dichvu321.com{path}"
-            
             cookies = client.cookies.get_dict() if hasattr(client, 'cookies') else {}
             cookie_str = "; ".join([f"{k}={v}" for k, v in cookies.items()])
-            
             return ws_url, cookie_str, user_agent
-        else:
-            logging.warning(f"Bilet alma başarısız yanıt: {data}")
     except Exception as e:
-        logging.error(f"Bilet alma istisnası: {e}")
+        logging.error(f"Bilet alma hatası: {e}")
     return None, None, None
 
 async def listen_live_feed():
+    # Telegram Bağlantı Testi
+    await send_telegram("🤖 <b>Bot Çalıştı!</b> WebSocket akışı dinleniyor...")
+
     while True:
         ws_url, cookie_str, user_agent = await asyncio.to_thread(get_websocket_ticket)
         if not ws_url:
-            logging.warning("WebSocket URL alınamadı, 10 saniye sonra tekrar deneniyor...")
             await asyncio.sleep(10)
             continue
 
-        logging.info("WebSocket bağlantısı kuruluyor...")
         ws_headers = {
             "User-Agent": user_agent,
             "Origin": "https://dichvu321.com",
@@ -187,7 +180,6 @@ async def listen_live_feed():
         }
         
         try:
-            # ping_interval=None ile zaman aşımı kesilmeleri engellendi
             async with websockets.connect(
                 ws_url,
                 additional_headers=ws_headers,
@@ -195,9 +187,12 @@ async def listen_live_feed():
                 ping_timeout=None,
                 close_timeout=10
             ) as websocket:
-                logging.info("✅ WebSocket bağlantısı başarılı! Akış kesintisiz dinleniyor...")
+                logging.info("✅ WebSocket aktif. Akış taranıyor...")
 
                 async for message in websocket:
+                    # Gelen ham veriyi loglama (Sadece canlı veri gelip gelmediğini kontrol için)
+                    logging.info(f"📩 Gelen Pak: {message[:120]}")
+
                     try:
                         event_data = json.loads(message)
                     except Exception:
@@ -206,11 +201,6 @@ async def listen_live_feed():
                     payload = event_data.get("data") if isinstance(event_data.get("data"), dict) else event_data
 
                     if not isinstance(payload, dict) or payload.get("status") == "connected":
-                        continue
-
-                    box_type_raw = str(payload.get("type") or "").lower()
-                    source_raw = str(payload.get("source") or "").lower()
-                    if "goody" in box_type_raw or "goody" in source_raw:
                         continue
 
                     username = (
@@ -227,7 +217,9 @@ async def listen_live_feed():
 
                     coins = extract_coins(payload)
 
+                    # Filtre kontrol logu
                     if coins < 30:
+                        logging.info(f"⏩ Düşük elmas atlandı ({clean_username}: {coins} elmas)")
                         continue
 
                     taken = await asyncio.to_thread(is_already_taken_by_other_bot, clean_username)
@@ -251,11 +243,11 @@ async def listen_live_feed():
                         f"⚡ <a href='{live_link}'>YAYINA GİT</a>"
                     )
 
-                    asyncio.create_task(send_telegram(mesaj))
-                    logging.info(f"HAZİNE YAKALANDI: @{clean_username} | Elmas: {coins}")
+                    await send_telegram(mesaj)
+                    logging.info(f"🔥 HAZİNE BİLDİRİLDİ: @{clean_username} | Elmas: {coins}")
 
         except Exception as e:
-            logging.warning(f"Bağlantı koptu veya hata oluştu: {e}. 3 saniye sonra yeniden bağlanılıyor...")
+            logging.warning(f"Bağlantı koptu ({e}), 3 saniye sonra tekrar bağlanılıyor...")
             await asyncio.sleep(3)
 
 if __name__ == "__main__":
