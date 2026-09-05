@@ -1,16 +1,17 @@
-import os, json, time, asyncio, logging
+import os, sys, json, time, asyncio, logging
 import cloudscraper
 import websockets
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from threading import Thread
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
+# Logları tamponlamadan doğrudan ekrana bas
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s", stream=sys.stdout)
 
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Core Bot Active!")
+        self.wfile.write(b"Bot Aktif!")
 
 def run_dummy_server():
     port = int(os.environ.get("PORT", 8080))
@@ -26,17 +27,20 @@ scraper = cloudscraper.create_scraper(
 )
 
 async def send_telegram(mesaj):
-    if not TELEGRAM_BOT_TOKEN or not CHAT_ID: return
+    if not TELEGRAM_BOT_TOKEN or not CHAT_ID:
+        logging.warning("⚠️ BOT_TOKEN veya CHAT_ID eksik!")
+        return
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        await asyncio.to_thread(scraper.post, url, json={
+        res = await asyncio.to_thread(scraper.post, url, json={
             "chat_id": CHAT_ID, 
             "text": mesaj, 
             "parse_mode": "HTML", 
             "disable_web_page_preview": True
-        }, timeout=5)
+        }, timeout=8)
+        logging.info(f"📤 Telegram Yanıt Kodu: {res.status_code}")
     except Exception as e:
-        logging.error(f"Telegram gönderme hatası: {e}")
+        logging.error(f"❌ Telegram Gönderme Hatası: {e}")
 
 def process_item(username, coins, box_type="HAZİNE SANDIĞI", viewers=0):
     clean_username = str(username).replace("@", "").strip().lower()
@@ -49,8 +53,7 @@ def process_item(username, coins, box_type="HAZİNE SANDIĞI", viewers=0):
     PROCESSED_CACHE[dedup_key] = time.time()
     if len(PROCESSED_CACHE) > 500: PROCESSED_CACHE.clear()
 
-    logging.info(f"🎯 Sandık Yakalandı: @{clean_username} ({coins} Coin) - İzleyici: {viewers}")
-    
+    logging.info(f"🎯 Sandık Yakalandı: @{clean_username} ({coins} Coin)")
     turkce_tur = "HAZİNE SANDIĞI" if "box" in box_type.lower() else "ŞANSLI KESE"
     mesaj = (
         f"🎁 <b>{turkce_tur}</b>\n\n"
@@ -73,23 +76,33 @@ async def init_session_and_get_ticket():
     }
 
     try:
-        await asyncio.to_thread(scraper.get, main_url, headers=headers, timeout=15)
-        res = await asyncio.to_thread(scraper.post, proxy_url, headers=headers, timeout=15)
-        data = res.json()
+        logging.info("1️⃣ Ana sayfaya gidiliyor (Cloudflare & Çerez)...")
+        r1 = await asyncio.to_thread(scraper.get, main_url, headers=headers, timeout=15)
+        logging.info(f"1️⃣ Ana sayfa kodu: {r1.status_code}")
+
+        logging.info("2️⃣ proxy.php'den bilet isteniyor...")
+        r2 = await asyncio.to_thread(scraper.post, proxy_url, headers=headers, timeout=15)
+        logging.info(f"2️⃣ Bilet yanıt kodu: {r2.status_code}")
+        logging.info(f"2️⃣ Bilet ham yanıtı: {r2.text[:200]}")
         
+        data = r2.json()
         if data.get("success") and data.get("path"):
             return f"wss://dichvu321.com{data.get('path')}"
+        else:
+            logging.warning(f"⚠️ Bilet alınamadı, dönen veri: {data}")
     except Exception as e:
-        logging.error(f"Oturum/Bilet hatası: {e}")
+        logging.error(f"❌ Oturum hatası: {e}")
     return None
 
 async def listen_to_feed():
     while True:
         ws_url = await init_session_and_get_ticket()
         if not ws_url:
+            logging.warning("⏳ Bilet temin edilemedi. 5 saniye bekleniyor...")
             await asyncio.sleep(5)
             continue
 
+        logging.info(f"🔗 WebSocket Bağlantısı kuruluyor...")
         try:
             ws_headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
@@ -104,13 +117,12 @@ async def listen_to_feed():
                 
                 async for message in ws:
                     msg_str = message.decode('utf-8', 'ignore') if isinstance(message, bytes) else str(message)
-                    if msg_str in ["ping", "pong", "{}"]: 
-                        continue
-                        
+                    if msg_str in ["ping", "pong", "{}"]: continue
+                    
                     try:
                         data = json.loads(msg_str)
+                        logging.info(f"📩 Gelen Paket: {msg_str[:90]}...")
                         
-                        # F12'deki demoEvents ve events yapısını ayrıştırma
                         items = []
                         if isinstance(data, dict):
                             if "events" in data and isinstance(data["events"], list):
@@ -131,14 +143,15 @@ async def listen_to_feed():
                             
                             if username and coins > 0:
                                 process_item(username, coins, box_type, viewers)
-                    except Exception:
-                        pass
+                    except Exception as parse_err:
+                        logging.error(f"Paket ayrıştırma hatası: {parse_err}")
                         
         except Exception as e:
-            logging.warning(f"Tünel kapandı/bitti ({e}). Yeni bilet alınıyor...")
-            await asyncio.sleep(2)
+            logging.warning(f"⚠️ Tünel koptu ({e}). Yeniden bağlanılacak...")
+            await asyncio.sleep(3)
 
 async def main():
+    logging.info("🏁 Program main() fonksiyonuna girdi.")
     await send_telegram("🤖 <b>Bot Çekirdeği Başlatıldı!</b> Canlı sandık akışı devrede...")
     await listen_to_feed()
 
