@@ -3,10 +3,9 @@ import json
 import asyncio
 import logging
 import requests
-import subprocess
-import sys
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from threading import Thread
+from playwright.async_api import async_playwright
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -24,14 +23,6 @@ def run_dummy_server():
     server = HTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler)
     logging.info(f"🌐 Dummy HTTP Server {port} portunda çalışıyor.")
     server.serve_forever()
-
-def ensure_chromium_installed():
-    logging.info("Chromium sürücüsü kontrol ediliyor...")
-    try:
-        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
-        logging.info("✅ Chromium sürücüsü hazır.")
-    except Exception as e:
-        logging.error(f"Chromium kurulum hatası: {e}")
 
 TELEGRAM_BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -93,8 +84,6 @@ def parse_and_process(message_str):
         return None
 
 async def main():
-    from playwright.async_api import async_playwright
-
     await send_telegram("🤖 <b>Playwright Bot Başlatıldı!</b> Akış dinleniyor...")
 
     async with async_playwright() as p:
@@ -149,5 +138,4 @@ async def main():
 if __name__ == "__main__":
     logging.info("Bot Başlatılıyor...")
     Thread(target=run_dummy_server, daemon=True).start()
-    ensure_chromium_installed()
     asyncio.run(main())
