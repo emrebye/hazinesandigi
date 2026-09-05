@@ -4,10 +4,13 @@ import websockets
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from threading import Thread
 
-# Logları tamponlamadan doğrudan ekrana bas
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s", stream=sys.stdout)
 
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
+    def do_HEAD(self):
+        self.send_response(200)
+        self.end_headers()
+
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
@@ -28,19 +31,17 @@ scraper = cloudscraper.create_scraper(
 
 async def send_telegram(mesaj):
     if not TELEGRAM_BOT_TOKEN or not CHAT_ID:
-        logging.warning("⚠️ BOT_TOKEN veya CHAT_ID eksik!")
         return
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        res = await asyncio.to_thread(scraper.post, url, json={
+        await asyncio.to_thread(scraper.post, url, json={
             "chat_id": CHAT_ID, 
             "text": mesaj, 
             "parse_mode": "HTML", 
             "disable_web_page_preview": True
         }, timeout=8)
-        logging.info(f"📤 Telegram Yanıt Kodu: {res.status_code}")
     except Exception as e:
-        logging.error(f"❌ Telegram Gönderme Hatası: {e}")
+        logging.error(f"Telegram Gönderme Hatası: {e}")
 
 def process_item(username, coins, box_type="HAZİNE SANDIĞI", viewers=0):
     clean_username = str(username).replace("@", "").strip().lower()
@@ -66,30 +67,35 @@ def process_item(username, coins, box_type="HAZİNE SANDIĞI", viewers=0):
 
 async def init_session_and_get_ticket():
     main_url = "https://dichvu321.com/en/tiktok-treasure-box-bot/"
-    proxy_url = "https://dichvu321.com/proxy.php?transport=ws&mode=bootstrap&stream=box&live=1000"
+    
+    # Tarayıcının gönderdiği tam parametreler
+    proxy_url = "https://dichvu321.com/proxy.php?transport=ws&mode=bootstrap&stream=box&live=1000&demo=true"
     
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
         "Referer": main_url,
-        "Origin": "https://dichvu321.com",
-        "X-Requested-With": "XMLHttpRequest"
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "X-Requested-With": "XMLHttpRequest",
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-origin"
     }
 
     try:
-        logging.info("1️⃣ Ana sayfaya gidiliyor (Cloudflare & Çerez)...")
+        logging.info("1️⃣ Ana sayfaya gidiliyor...")
         r1 = await asyncio.to_thread(scraper.get, main_url, headers=headers, timeout=15)
-        logging.info(f"1️⃣ Ana sayfa kodu: {r1.status_code}")
-
-        logging.info("2️⃣ proxy.php'den bilet isteniyor...")
-        r2 = await asyncio.to_thread(scraper.post, proxy_url, headers=headers, timeout=15)
+        
+        logging.info("2️⃣ proxy.php'den bilet isteniyor (GET)...")
+        # POST yerine GET kullanıyoruz
+        r2 = await asyncio.to_thread(scraper.get, proxy_url, headers=headers, timeout=15)
         logging.info(f"2️⃣ Bilet yanıt kodu: {r2.status_code}")
-        logging.info(f"2️⃣ Bilet ham yanıtı: {r2.text[:200]}")
+        logging.info(f"2️⃣ Bilet ham yanıtı: {r2.text[:150]}")
         
         data = r2.json()
         if data.get("success") and data.get("path"):
             return f"wss://dichvu321.com{data.get('path')}"
         else:
-            logging.warning(f"⚠️ Bilet alınamadı, dönen veri: {data}")
+            logging.warning(f"⚠️ Bilet reddedildi: {data}")
     except Exception as e:
         logging.error(f"❌ Oturum hatası: {e}")
     return None
@@ -98,11 +104,10 @@ async def listen_to_feed():
     while True:
         ws_url = await init_session_and_get_ticket()
         if not ws_url:
-            logging.warning("⏳ Bilet temin edilemedi. 5 saniye bekleniyor...")
+            logging.warning("⏳ Bilet alınamadı. 5 saniye sonra tekrar deneniyor...")
             await asyncio.sleep(5)
             continue
 
-        logging.info(f"🔗 WebSocket Bağlantısı kuruluyor...")
         try:
             ws_headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
@@ -121,8 +126,8 @@ async def listen_to_feed():
                     
                     try:
                         data = json.loads(msg_str)
-                        logging.info(f"📩 Gelen Paket: {msg_str[:90]}...")
                         
+                        # Kiwi'de yakaladığımız demoEvents/events yapısı
                         items = []
                         if isinstance(data, dict):
                             if "events" in data and isinstance(data["events"], list):
@@ -143,15 +148,15 @@ async def listen_to_feed():
                             
                             if username and coins > 0:
                                 process_item(username, coins, box_type, viewers)
-                    except Exception as parse_err:
-                        logging.error(f"Paket ayrıştırma hatası: {parse_err}")
+                    except Exception:
+                        pass
                         
         except Exception as e:
             logging.warning(f"⚠️ Tünel koptu ({e}). Yeniden bağlanılacak...")
             await asyncio.sleep(3)
 
 async def main():
-    logging.info("🏁 Program main() fonksiyonuna girdi.")
+    logging.info("🏁 Bot başlatıldı.")
     await send_telegram("🤖 <b>Bot Çekirdeği Başlatıldı!</b> Canlı sandık akışı devrede...")
     await listen_to_feed()
 
