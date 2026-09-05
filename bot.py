@@ -1,10 +1,15 @@
 import os
+import time
 import asyncio
 import json
+import logging
 import requests
 import websockets
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from threading import Thread
+
+# Loglama ayarları
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 # Render/UptimeRobot Kapanma Engelleyici (Dummy HTTP Server)
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
@@ -21,30 +26,42 @@ def run_dummy_server():
     server = HTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler)
     server.serve_forever()
 
-# Genel Ayarlar (18 Bin Yayın Taraması Ayarlandı)
+# Genel Ayarlar
 TELEGRAM_BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
-PROXY_URL = "https://dichvu321.com/proxy.php?stream=all&live=18000"
+LIVE_CAPACITY = os.getenv("LIVE_CAPACITY", "1000") # 1000, 2000, 4000, 6000, 10000
+
+# Sitenin tam bilet alma URL'si
+BOOTSTRAP_URL = f"https://dichvu321.com/proxy.php?transport=ws&mode=bootstrap&stream=box&live={LIVE_CAPACITY}"
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
     "Origin": "https://dichvu321.com",
-    "Referer": "https://dichvu321.com/"
+    "Referer": "https://dichvu321.com/en/tiktok-treasure-box-bot/",
+    "Accept": "application/json"
 }
 
-# Upstash REST Kilit Mekanizması
+# Upstash REST Kilit Mekanizması & Zaman Ayarlı Yerel Önbellek
 UPSTASH_URL = os.getenv("UPSTASH_REDIS_REST_URL")
 UPSTASH_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN")
-CACHE_TIMEOUT = 10  # 10 saniye kilit süresi
+CACHE_TIMEOUT = 15  # 15 saniye kilit süresi
 
 http_session = requests.Session()
-LOCAL_CACHE = set()
+LOCAL_CACHE = {} # {username: timestamp}
 
 def is_already_taken_by_other_bot(clean_username):
+    now = time.time()
+    
+    # Süresi dolmuş yerel önbellek verilerini temizle
+    expired_keys = [k for k, v in LOCAL_CACHE.items() if now - v > CACHE_TIMEOUT]
+    for k in expired_keys:
+        del LOCAL_CACHE[k]
+
     if clean_username in LOCAL_CACHE:
         return True
 
     if not UPSTASH_URL or not UPSTASH_TOKEN:
+        LOCAL_CACHE[clean_username] = now
         return False
 
     cache_key = f"hazine:{clean_username}"
@@ -53,193 +70,173 @@ def is_already_taken_by_other_bot(clean_username):
         url = f"{UPSTASH_URL}/set/{cache_key}/1/NX/EX/{CACHE_TIMEOUT}"
         response = http_session.get(url, headers=headers, timeout=2)
         if response.ok and response.json().get("result") == "OK":
-            LOCAL_CACHE.add(clean_username)
+            LOCAL_CACHE[clean_username] = now
             return False
         return True
     except Exception as e:
-        print(f"⚠️ Upstash bağlantı hatası: {e}")
+        logging.warning(f"Upstash bağlantı hatası: {e}")
+        LOCAL_CACHE[clean_username] = now
         return False
 
-def to_int(value):
-    try:
-        if value is None or isinstance(value, bool):
-            return None
-        number = int(value)
-        if 0 <= number <= 100000:
-            return number
-    except Exception:
-        pass
-    return None
-
-def recursive_find_key(obj, wanted_keys, path=""):
-    if isinstance(obj, dict):
-        for key, value in obj.items():
-            key_normalized = str(key).lower().replace("_", "").replace("-", "")
-            current_path = f"{path}.{key}" if path else str(key)
-            if key_normalized in wanted_keys:
-                number = to_int(value)
-                if number is not None:
-                    return number, current_path
-            result = recursive_find_key(value, wanted_keys, current_path)
-            if result[0] is not None:
-                return result
-    elif isinstance(obj, list):
-        for index, item in enumerate(obj):
-            result = recursive_find_key(item, wanted_keys, f"{path}[{index}]")
-            if result[0] is not None:
-                return result
-    return None, None
-
-def get_chest_coins(payload, envelope_info):
-    coin_keys = ["totaldiamondcount", "diamondcount", "coincount", "totalcoins", "coins"]
+def extract_coins(data):
+    """Gelen veriden elmas/coin miktarını çeker."""
+    if not isinstance(data, dict):
+        return 0
     
-    # 1. Doğrudan Kontrol
-    for key in coin_keys:
-        val = envelope_info.get(key) or payload.get(key)
-        num = to_int(val)
-        if num is not None and num > 0:
-            return num
-            
-    # 2. Derinlemesine Derin Arama (Nested Search)
-    val, _ = recursive_find_key(payload, coin_keys)
-    if val is not None:
-        return val
-        
+    # Doğrudan anahtarları kontrol et
+    for key in ["coins", "diamonds", "totalCoins", "totalCoinsCount", "diamondCount"]:
+        val = data.get(key)
+        if val is not None:
+            try:
+                num = int(val)
+                if num > 0:
+                    return num
+            except (ValueError, TypeError):
+                pass
+                
+    # EnvelopeInfo içini kontrol et
+    env = data.get("envelopeInfo")
+    if isinstance(env, dict):
+        for key in ["coins", "diamonds", "totalCoins", "diamondCount"]:
+            val = env.get(key)
+            if val is not None:
+                try:
+                    num = int(val)
+                    if num > 0:
+                        return num
+                except (ValueError, TypeError):
+                    pass
     return 0
 
-def get_chest_recipients(payload):
-    key_groups = [
-        ["canopen"], ["peoplecount"], ["participantcount"], ["winnercount"],
-        ["claimcount"], ["recipientcount"], ["grabcount"], ["membercount"],
-        ["people"], ["participants"], ["winners"], ["recipients"]
-    ]
-    for wanted_keys in key_groups:
-        value, path = recursive_find_key(payload, wanted_keys)
-        if value is not None:
-            return value, path
-    return None, None
+def extract_recipients(data):
+    """Gelen veriden kişi sayısını çeker."""
+    if not isinstance(data, dict):
+        return 0
+    for key in ["recipients", "people", "peopleCount", "winnerCount", "canOpen"]:
+        val = data.get(key)
+        if val is not None:
+            try:
+                return int(val)
+            except (ValueError, TypeError):
+                pass
+    return 0
 
 async def send_telegram(mesaj):
     if not TELEGRAM_BOT_TOKEN or not CHAT_ID:
-        print("⚠️ Telegram token veya Chat ID eksik!")
+        logging.error("Telegram BOT_TOKEN veya CHAT_ID eksik!")
         return
 
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": CHAT_ID,
         "text": mesaj,
+        "parse_mode": "HTML",
         "disable_web_page_preview": True
     }
     try:
-        await asyncio.to_thread(http_session.post, url, json=payload, timeout=2)
-    except Exception:
-        pass
+        res = await asyncio.to_thread(http_session.post, url, json=payload, timeout=5)
+        if not res.ok:
+            logging.error(f"Telegram API Hatası: {res.status_code} - {res.text}")
+    except Exception as e:
+        logging.error(f"Telegram Gönderim Hatası: {e}")
+
+def get_websocket_url():
+    """Proxy adresinden yeni WebSocket bileti ve URL alır."""
+    try:
+        res = http_session.get(BOOTSTRAP_URL, headers=HEADERS, timeout=10)
+        data = res.json()
+        if data.get("success"):
+            path = data.get("path", "").replace("\\/", "/")
+            return f"wss://dichvu321.com{path}"
+        else:
+            logging.warning(f"Bootstrap başarısız yanıt döndü: {data}")
+    except Exception as e:
+        logging.error(f"Bilet alma hatası: {e}")
+    return None
 
 async def listen_live_feed():
     while True:
+        ws_url = await asyncio.to_thread(get_websocket_url)
+        if not ws_url:
+            logging.warning("WebSocket URL alınamadı, 5 saniye sonra tekrar deneniyor...")
+            await asyncio.sleep(5)
+            continue
+
+        logging.info(f"WebSocket bağlantısı kuruluyor...")
         try:
-            res = await asyncio.to_thread(http_session.get, PROXY_URL, headers=HEADERS, timeout=5)
-            data = res.json()
+            async with websockets.connect(
+                ws_url,
+                additional_headers=HEADERS,
+                ping_interval=20,
+                ping_timeout=10
+            ) as websocket:
+                logging.info("WebSocket bağlantısı başarılı! Akış dinleniyor...")
 
-            if data.get("success"):
-                path = data.get("path")
-                ws_url = f"wss://dichvu321.com{path}"
+                async for message in websocket:
+                    try:
+                        event_data = json.loads(message)
+                    except Exception:
+                        continue
 
-                async with websockets.connect(
-                    ws_url,
-                    additional_headers=HEADERS,
-                    ping_interval=20,
-                    ping_timeout=10
-                ) as websocket:
+                    payload = event_data.get("data") if isinstance(event_data.get("data"), dict) else event_data
 
-                    async for message in websocket:
-                        try:
-                            event_data = json.loads(message)
-                        except Exception:
-                            continue
+                    if not isinstance(payload, dict) or payload.get("status") == "connected":
+                        continue
 
-                        payload = (
-                            event_data.get("data")
-                            if isinstance(event_data.get("data"), dict)
-                            else event_data
-                        )
+                    # Goody bag veya ilgisiz türleri ele
+                    box_type_raw = str(payload.get("type") or "").lower()
+                    source_raw = str(payload.get("source") or "").lower()
+                    if "goody" in box_type_raw or "goody" in source_raw:
+                        continue
 
-                        if not isinstance(payload, dict) or payload.get("status") == "connected":
-                            continue
+                    username = (
+                        payload.get("uniqueId")
+                        or payload.get("username")
+                        or payload.get("nickname")
+                        or payload.get("author")
+                        or ""
+                    )
+                    clean_username = str(username).replace("@", "").strip().lower()
 
-                        box_type_raw = str(payload.get("type") or "").lower()
-                        source_raw = str(payload.get("source") or "").lower()
-                        envelope_info = payload.get("envelopeInfo") or {}
+                    if not clean_username:
+                        continue
 
-                        if not isinstance(envelope_info, dict):
-                            envelope_info = {}
+                    # Elmas Tespiti
+                    coins = extract_coins(payload)
 
-                        business_type = envelope_info.get("businessType", 1)
-                        if business_type == 2 or "goody" in box_type_raw or "goody" in source_raw:
-                            continue
+                    # 30 Elmas ve üzeri filtre
+                    if coins < 30:
+                        continue
 
-                        username = (
-                            payload.get("uniqueId")
-                            or payload.get("nickname")
-                            or payload.get("username")
-                            or ""
-                        )
-                        clean_username = str(username).replace("@", "").strip().lower()
+                    taken = await asyncio.to_thread(is_already_taken_by_other_bot, clean_username)
+                    if taken:
+                        continue
 
-                        if not clean_username:
-                            continue
+                    level = payload.get("level", 0)
+                    box_title = f"🎁 <b>HAZİNE SANDIĞI</b> (Level {level})" if level else "🎁 <b>HAZİNE SANDIĞI</b>"
+                    recipients = extract_recipients(payload)
+                    recipients_text = f"{recipients} KİŞİ" if recipients > 0 else "Belirtilmedi"
+                    viewers = payload.get("viewers", payload.get("viewerCount", 0))
 
-                        # Derin Elmas Tespiti
-                        coins = get_chest_coins(payload, envelope_info)
+                    live_link = f"https://www.tiktok.com/@{clean_username}/live"
 
-                        # --- KESİN FİLTRE: 30 ELMAS VE ÜZERİ (30'DAN AZ İSE ATLA) ---
-                        if coins < 30:
-                            continue
+                    mesaj = (
+                        f"{box_title}\n\n"
+                        f"👤 <b>YAYINCI:</b> @{clean_username}\n"
+                        f"👁️ <b>İZLEYİCİ:</b> {viewers}\n"
+                        f"💎 <b>ELMAS:</b> {coins}\n"
+                        f"📦 <b>DAĞITILAN:</b> {recipients_text}\n\n"
+                        f"⚡ <a href='{live_link}'>YAYINA GİT</a>"
+                    )
 
-                        taken = await asyncio.to_thread(is_already_taken_by_other_bot, clean_username)
-                        if taken:
-                            continue
-
-                        level = payload.get("level", 0)
-                        try:
-                            level = int(level)
-                        except Exception:
-                            level = 0
-
-                        box_title = (
-                            f"🎁 HAZİNE SANDIĞI (Level {level})"
-                            if level > 0
-                            else "🎁 HAZİNE SANDIĞI"
-                        )
-
-                        recipients, _ = get_chest_recipients(payload)
-                        recipients_text = f"{recipients} KİŞİ" if recipients is not None else "0 KİŞİ"
-
-                        viewers = (
-                            payload.get("viewerCount")
-                            or payload.get("userCount")
-                            or envelope_info.get("viewerCount")
-                            or 0
-                        )
-
-                        live_link = f"https://www.tiktok.com/@{clean_username}/live"
-
-                        mesaj = (
-                            f"{box_title}\n"
-                            f"👤 YAYINCI: @{clean_username}\n"
-                            f"👁️ İZLEYİCİ: {viewers}\n"
-                            f"💎 ELMAS: {coins}\n"
-                            f"📦 DAĞITILAN: {recipients_text}\n"
-                            f"🔗 {live_link}"
-                        )
-
-                        asyncio.create_task(send_telegram(mesaj))
-                        print(f"HAZİNE (>=30): @{clean_username} | Elmas: {coins} | Dağıtılan: {recipients_text}")
+                    asyncio.create_task(send_telegram(mesaj))
+                    logging.info(f"HAZİNE YAKALANDI: @{clean_username} | Elmas: {coins}")
 
         except Exception as e:
-            print(f"Bağlantı hatası: {e}")
-            await asyncio.sleep(0.5)
+            logging.warning(f"Bağlantı koptu veya hata oluştu: {e}. 3 saniye sonra yeniden bağlanılıyor...")
+            await asyncio.sleep(3)
 
 if __name__ == "__main__":
+    logging.info("Bot Başlatılıyor...")
     Thread(target=run_dummy_server, daemon=True).start()
     asyncio.run(listen_live_feed())
