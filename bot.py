@@ -3,10 +3,9 @@ import json
 import asyncio
 import logging
 import requests
-import subprocess
-import sys
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from threading import Thread
+from playwright.async_api import async_playwright
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -25,17 +24,9 @@ def run_dummy_server():
     logging.info(f"🌐 Dummy HTTP Server {port} portunda çalışıyor.")
     server.serve_forever()
 
-def ensure_chromium_installed():
-    logging.info("Chromium sürücüsü kontrol ediliyor ve indiriliyor...")
-    try:
-        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
-        logging.info("✅ Chromium sürücüsü hazır.")
-    except Exception as e:
-        logging.error(f"Chromium kurulum hatası: {e}")
-
 TELEGRAM_BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
-MIN_COINS = int(os.getenv("MIN_COINS", "5"))
+MIN_COINS = int(os.getenv("MIN_COINS", "1"))  # Test için minimum 1 yapıldı
 
 async def send_telegram(mesaj):
     if not TELEGRAM_BOT_TOKEN or not CHAT_ID:
@@ -86,16 +77,15 @@ def parse_and_process(message_str):
                     pass
 
         if coins < MIN_COINS:
+            logging.info(f"⚠️ Sandık elmas sayısı yetersiz ({coins} < {MIN_COINS}): @{clean_username}")
             return None
 
         return clean_username, coins, payload
-    except Exception:
+    except Exception as e:
         return None
 
 async def main():
-    from playwright.async_api import async_playwright
-
-    await send_telegram("🤖 <b>Playwright Bot Başlatıldı!</b> Akış dinleniyor...")
+    await send_telegram("🤖 <b>Playwright Bot Başlatıldı!</b> Akış ve paketler izleniyor...")
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -112,10 +102,10 @@ async def main():
 
             def on_frame_received(frame_data):
                 try:
-                    if isinstance(frame_data, bytes):
-                        payload_str = frame_data.decode('utf-8', errors='ignore')
-                    else:
-                        payload_str = str(frame_data)
+                    payload_str = frame_data.decode('utf-8', errors='ignore') if isinstance(frame_data, bytes) else str(frame_data)
+                    
+                    # Gelen ham paketi loglarda görelim
+                    logging.info(f"📩 Paket Geldi ({len(payload_str)} bayt): {payload_str[:120]}...")
 
                     res = parse_and_process(payload_str)
                     if res:
@@ -148,8 +138,5 @@ async def main():
 
 if __name__ == "__main__":
     logging.info("Bot Başlatılıyor...")
-    # Port sunucusu ilk sırada başlatılır (Render port hatası vermez)
     Thread(target=run_dummy_server, daemon=True).start()
-    # Chromium yoksa otomatik kurulur
-    ensure_chromium_installed()
     asyncio.run(main())
