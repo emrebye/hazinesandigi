@@ -10,20 +10,6 @@ from threading import Thread
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# Runtime ortamında Chromium yoksa otomatik kur
-logging.info("Chromium sürücüsü kontrol ediliyor ve yükleniyor...")
-try:
-    subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
-    logging.info("✅ Chromium sürücüsü hazır.")
-except Exception as e:
-    logging.error(f"Chromium kurulum hatası: {e}")
-
-from playwright.async_api import async_playwright
-
-TELEGRAM_BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
-MIN_COINS = int(os.getenv("MIN_COINS", "5"))
-
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -36,7 +22,20 @@ class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
 def run_dummy_server():
     port = int(os.environ.get("PORT", 8080))
     server = HTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler)
+    logging.info(f"🌐 Dummy HTTP Server {port} portunda çalışıyor.")
     server.serve_forever()
+
+def ensure_chromium_installed():
+    logging.info("Chromium sürücüsü kontrol ediliyor...")
+    try:
+        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+        logging.info("✅ Chromium sürücüsü hazır.")
+    except Exception as e:
+        logging.error(f"Chromium kurulum hatası: {e}")
+
+TELEGRAM_BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
+MIN_COINS = int(os.getenv("MIN_COINS", "5"))
 
 async def send_telegram(mesaj):
     if not TELEGRAM_BOT_TOKEN or not CHAT_ID:
@@ -94,7 +93,9 @@ def parse_and_process(message_str):
         return None
 
 async def main():
-    await send_telegram("🤖 <b>Playwright Bot Başlatıldı!</b> Gerçek Chrome tarayıcısı açılıyor...")
+    from playwright.async_api import async_playwright
+
+    await send_telegram("🤖 <b>Playwright Bot Başlatıldı!</b> Akış dinleniyor...")
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -109,9 +110,13 @@ async def main():
         def on_websocket(ws):
             logging.info(f"🌐 WebSocket Yakalandı: {ws.url}")
 
-            def on_frame_received(frame):
+            def on_frame_received(frame_data):
                 try:
-                    payload_str = frame.text if isinstance(frame.text, str) else frame.payload.decode('utf-8', errors='ignore')
+                    if isinstance(frame_data, bytes):
+                        payload_str = frame_data.decode('utf-8', errors='ignore')
+                    else:
+                        payload_str = str(frame_data)
+
                     res = parse_and_process(payload_str)
                     if res:
                         clean_username, coins, data = res
@@ -144,4 +149,5 @@ async def main():
 if __name__ == "__main__":
     logging.info("Bot Başlatılıyor...")
     Thread(target=run_dummy_server, daemon=True).start()
+    ensure_chromium_installed()
     asyncio.run(main())
