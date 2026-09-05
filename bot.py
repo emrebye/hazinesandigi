@@ -31,6 +31,15 @@ MIN_COINS = int(os.getenv("MIN_COINS", "1"))
 
 PROCESSED_IDS = set()
 
+def get_country_flag(code):
+    """Ülke kodunu (TR, JP, US) bayrak emojisine dönüştürür."""
+    if not code or len(str(code)) != 2:
+        return "🌐"
+    try:
+        return chr(ord(code[0].upper()) + 127397) + chr(ord(code[1].upper()) + 127397)
+    except Exception:
+        return "🌐"
+
 async def send_telegram(mesaj):
     if not TELEGRAM_BOT_TOKEN or not CHAT_ID:
         logging.error("Telegram BOT_TOKEN veya CHAT_ID eksik!")
@@ -45,11 +54,11 @@ async def send_telegram(mesaj):
     }
     try:
         await asyncio.to_thread(requests.post, url, json=payload, timeout=5)
-        logging.info("✅ Telegram mesajı başarıyla iletildi.")
+        logging.info("✅ Telegram mesajı iletildi.")
     except Exception as e:
         logging.error(f"Telegram Gönderim Hatası: {e}")
 
-def process_item(username, coins, box_type="HAZİNE SANDIĞI", viewers=0):
+def process_item(username, coins, box_type="HAZİNE SANDIĞI", viewers=0, country=""):
     clean_username = str(username).replace("@", "").strip().lower()
     if not clean_username or coins < MIN_COINS:
         return
@@ -59,16 +68,21 @@ def process_item(username, coins, box_type="HAZİNE SANDIĞI", viewers=0):
         return
     PROCESSED_IDS.add(dedup_key)
 
+    flag = get_country_flag(country)
+    viewers_count = int(viewers) if viewers else 1
+    rate = round(coins / viewers_count, 1) if viewers_count > 0 else 1.0
     live_link = f"https://www.tiktok.com/@{clean_username}/live"
+
+    # Görseldeki tasarıma uygun Telegram mesaj şablonu
     mesaj = (
-        f"🎁 <b>{box_type.upper()}</b>\n\n"
-        f"👤 <b>YAYINCI:</b> @{clean_username}\n"
-        f"👁️ <b>İZLEYİCİ:</b> {viewers}\n"
-        f"💎 <b>ELMAS:</b> {coins}\n\n"
-        f"⚡ <a href='{live_link}'>YAYINA GİT</a>"
+        f"🎁 <b>## {box_type.upper()}</b> > <code>@{clean_username}</code>\n"
+        f"💎 <b>ELMAS:</b> {coins} {flag}\n"
+        f"👁️ <b>İZLEYİCİ:</b> {viewers_count} 👀\n"
+        f"📈 <b>ORAN (Rate):</b> {rate}\n\n"
+        f"⚡ <a href='{live_link}'>YAYINA GİT (TikTok)</a>"
     )
     asyncio.create_task(send_telegram(mesaj))
-    logging.info(f"🔥 HAZİNE YAKALANDI VE GÖNDERİLDİ: @{clean_username} ({coins} Elmas)")
+    logging.info(f"🔥 HAZİNE YAKALANDI: @{clean_username} ({coins} Elmas)")
 
 def parse_and_process(raw_str):
     try:
@@ -86,15 +100,16 @@ def parse_and_process(raw_str):
                         break
                     except (ValueError, TypeError):
                         pass
-            box_type = str(item.get("type") or "HAZİNE SANDIĞI")
-            viewers = item.get("viewers", item.get("viewerCount", 0))
-            process_item(username, coins, box_type, viewers)
+            box_type = str(item.get("type") or "TREASURE BOX")
+            viewers = item.get("viewers") or item.get("viewerCount") or item.get("userCount") or 0
+            country = item.get("country") or item.get("region") or item.get("nation") or ""
+            
+            process_item(username, coins, box_type, viewers, country)
     except Exception:
         pass
 
 async def scrape_dom_cards(page):
     try:
-        # Sayfadaki tüm metin bloklarını tara
         cards = await page.query_selector_all("div")
         for card in cards:
             try:
@@ -103,7 +118,7 @@ async def scrape_dom_cards(page):
                     lines = [l.strip() for l in text.split("\n") if l.strip()]
                     username = ""
                     coins = 0
-                    box_type = "HAZİNE SANDIĞI"
+                    box_type = "TREASURE BOX"
                     
                     for line in lines:
                         if "@" in line:
@@ -126,10 +141,10 @@ async def scrape_dom_cards(page):
             except Exception:
                 continue
     except Exception as e:
-        logging.error(f"DOM Tarama Hatası: {e}")
+        pass
 
 async def main():
-    await send_telegram("🤖 <b>Playwright Bot Aktif!</b> Kesintisiz mod başlatıldı.")
+    await send_telegram("🤖 <b>Playwright Bot Aktif!</b> Gelişmiş tasarım modu başlatıldı.")
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -161,15 +176,13 @@ async def main():
 
         while True:
             try:
-                logging.info("🔄 Sayfa yükleniyor/yenileniyor...")
+                logging.info("🔄 Sayfa yükleniyor...")
                 await page.goto("https://dichvu321.com/en/tiktok-treasure-box-bot/", wait_until="domcontentloaded", timeout=60000)
                 
-                # Yüklendikten sonra 10 saniye boyunca her 2 saniyede bir ekrandaki kartları tara
                 for _ in range(5):
                     await asyncio.sleep(2)
                     await scrape_dom_cards(page)
 
-                # 3 dakika boyunca canlı WebSocket verisini bekle
                 logging.info("⏳ Canlı akış dinleniyor (3 dakika)...")
                 await asyncio.sleep(180)
             except Exception as e:
