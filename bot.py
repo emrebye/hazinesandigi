@@ -36,10 +36,9 @@ def run_dummy_server():
 TELEGRAM_BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 LIVE_CAPACITY = os.getenv("LIVE_CAPACITY", "1000")
-MIN_COINS = int(os.getenv("MIN_COINS", "10"))
+MIN_COINS = int(os.getenv("MIN_COINS", "5"))  # Minimum limit 5 elmasa indirildi
 
 PAGE_URL = "https://dichvu321.com/en/tiktok-treasure-box-bot/"
-# stream=box yerine sitenin kullandığı stream=all parametresi eklendi
 BOOTSTRAP_URL = f"https://dichvu321.com/proxy.php?transport=ws&mode=bootstrap&stream=all&live={LIVE_CAPACITY}"
 
 UPSTASH_URL = os.getenv("UPSTASH_REDIS_REST_URL")
@@ -56,30 +55,31 @@ def is_already_taken_by_other_bot(clean_username):
         del LOCAL_CACHE[k]
 
     if clean_username in LOCAL_CACHE:
-        return True
+        return True, "LOCAL_CACHE_TEKRAR"
 
     if not UPSTASH_URL or not UPSTASH_TOKEN:
         LOCAL_CACHE[clean_username] = now
-        return False
+        return False, "OK"
 
     cache_key = f"hazine:{clean_username}"
     headers = {"Authorization": f"Bearer {UPSTASH_TOKEN}"}
     try:
         url = f"{UPSTASH_URL}/set/{cache_key}/1/NX/EX/{CACHE_TIMEOUT}"
         response = http_session.get(url, headers=headers, timeout=2)
-        if response.ok and response.json().get("result") == "OK":
+        res_json = response.json()
+        if response.ok and res_json.get("result") == "OK":
             LOCAL_CACHE[clean_username] = now
-            return False
-        return True
+            return False, "OK"
+        return True, f"UPSTASH_ENGEL ({res_json.get('result')})"
     except Exception as e:
         logging.warning(f"Upstash hatası: {e}")
         LOCAL_CACHE[clean_username] = now
-        return False
+        return False, "UPSTASH_HATA_GEÇİLDİ"
 
 def extract_coins(data):
     if not isinstance(data, dict):
         return 0
-    for key in ["coins", "diamonds", "totalCoins", "totalCoinsCount", "diamondCount", "val"]:
+    for key in ["coins", "diamonds", "totalCoins", "totalCoinsCount", "diamondCount", "val", "amount", "count"]:
         val = data.get(key)
         if val is not None:
             try:
@@ -88,9 +88,9 @@ def extract_coins(data):
                     return num
             except (ValueError, TypeError):
                 pass
-    env = data.get("envelopeInfo")
+    env = data.get("envelopeInfo") or data.get("box") or data.get("data")
     if isinstance(env, dict):
-        for key in ["coins", "diamonds", "totalCoins", "diamondCount"]:
+        for key in ["coins", "diamonds", "totalCoins", "diamondCount", "val", "amount"]:
             val = env.get(key)
             if val is not None:
                 try:
@@ -129,6 +129,8 @@ async def send_telegram(mesaj):
         res = await asyncio.to_thread(http_session.post, url, json=payload, timeout=5)
         if not res.ok:
             logging.error(f"Telegram API Hatası: {res.status_code} - {res.text}")
+        else:
+            logging.info("✅ Telegram bildirimi başarıyla gönderildi!")
     except Exception as e:
         logging.error(f"Telegram Gönderim Hatası: {e}")
 
@@ -163,7 +165,7 @@ def get_websocket_ticket():
     return None, None, None
 
 async def listen_live_feed():
-    await send_telegram("🤖 <b>Bot Güncellendi!</b> (stream=all) Canlı akış dinleniyor...")
+    await send_telegram("🤖 <b>Bot Çalıştırıldı!</b> Log takibi aktif...")
 
     while True:
         ws_url, cookie_str, user_agent = await asyncio.to_thread(get_websocket_ticket)
@@ -188,9 +190,13 @@ async def listen_live_feed():
                 logging.info("✅ WebSocket aktif. Akış taranıyor...")
 
                 async for message in websocket:
+                    # Gelen ham paketi logla
+                    logging.info(f"📩 GELEN WS PAKETİ: {message[:200]}")
+
                     try:
                         event_data = json.loads(message)
                     except Exception:
+                        logging.warning("⚠️ JSON ayrıştırılamadı.")
                         continue
 
                     payload = event_data.get("data") if isinstance(event_data.get("data"), dict) else event_data
@@ -203,20 +209,26 @@ async def listen_live_feed():
                         or payload.get("username")
                         or payload.get("nickname")
                         or payload.get("author")
+                        or payload.get("anchor")
+                        or payload.get("host")
+                        or payload.get("user")
                         or ""
                     )
                     clean_username = str(username).replace("@", "").strip().lower()
 
                     if not clean_username:
+                        logging.info("⛔ ATLANDI: Yayıncı adı (username) bulunamadı.")
                         continue
 
                     coins = extract_coins(payload)
 
                     if coins < MIN_COINS:
+                        logging.info(f"⛔ ATLANDI: @{clean_username} - Düşük Elmas ({coins} < {MIN_COINS})")
                         continue
 
-                    taken = await asyncio.to_thread(is_already_taken_by_other_bot, clean_username)
+                    taken, cache_reason = await asyncio.to_thread(is_already_taken_by_other_bot, clean_username)
                     if taken:
+                        logging.info(f"⛔ ATLANDI: @{clean_username} - Önbellek Engeli ({cache_reason})")
                         continue
 
                     box_type = str(payload.get("type") or "HAZİNE SANDIĞI").upper()
@@ -239,7 +251,7 @@ async def listen_live_feed():
                     )
 
                     await send_telegram(mesaj)
-                    logging.info(f"🔥 HAZİNE BİLDİRİLDİ: @{clean_username} | Elmas: {coins}")
+                    logging.info(f"🔥 BİLDİRİM GÖNDERİLDİ: @{clean_username} | Elmas: {coins}")
 
         except Exception as e:
             logging.warning(f"Bağlantı kesildi ({e}), 3 saniye sonra tekrar bağlanılıyor...")
