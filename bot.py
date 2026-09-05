@@ -8,9 +8,19 @@ import websockets
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from threading import Thread
 
+# Cloudflare / Anti-Bot korumasını aşmak için cloudscraper denemesi
+try:
+    import cloudscraper
+    scraper = cloudscraper.create_scraper(
+        browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True}
+    )
+    USE_SCRAPER = True
+except ImportError:
+    USE_SCRAPER = False
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# Render Web Servis Sürdürme Sunucusu
+# Render Canlı Tutan Dummy HTTP Sunucusu
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -123,39 +133,47 @@ async def send_telegram(mesaj):
         logging.error(f"Telegram Gönderim Hatası: {e}")
 
 def get_websocket_ticket():
-    """Ana sayfadan çerez alıp bilet isteğini atar, URL ve Çerez başlığını döner."""
+    """Cloudflare bypass ile ana sayfadan çerez alır, ardından bilet isteği atar."""
     try:
         user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
         
-        # 1. Oturum çerezlerini oluştur
-        http_session.get(PAGE_URL, headers={"User-Agent": user_agent}, timeout=10)
+        client = scraper if USE_SCRAPER else http_session
 
-        ajax_headers = {
+        # 1. Ana sayfaya gidip oturum çerezi üret
+        client.get(PAGE_URL, headers={"User-Agent": user_agent}, timeout=10)
+
+        headers = {
             "User-Agent": user_agent,
             "Origin": "https://dichvu321.com",
             "Referer": PAGE_URL,
             "Accept": "application/json, text/javascript, */*; q=0.01",
-            "X-Requested-With": "XMLHttpRequest"
+            "X-Requested-With": "XMLHttpRequest",
+            "Sec-Fetch-Dest": "empty",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "same-origin"
         }
 
-        res = http_session.get(BOOTSTRAP_URL, headers=ajax_headers, timeout=10)
+        # 2. Bilet isteği at
+        res = client.get(BOOTSTRAP_URL, headers=headers, timeout=10)
+        
+        if res.status_code != 200 or not res.text.strip().startswith("{"):
+            res = client.post(BOOTSTRAP_URL, headers=headers, timeout=10)
+
+        logging.info(f"Site Yanıt Kodu: {res.status_code} | Yanıt: {res.text[:150]}")
+
         data = res.json()
-
-        if not data.get("success"):
-            res = http_session.post(BOOTSTRAP_URL, headers=ajax_headers, timeout=10)
-            data = res.json()
-
         if data.get("success"):
             path = data.get("path", "").replace("\\/", "/")
             ws_url = f"wss://dichvu321.com{path}"
             
-            # Oluşan çerezleri string formatına çevir
-            cookies = http_session.cookies.get_dict()
+            cookies = client.cookies.get_dict() if hasattr(client, 'cookies') else {}
             cookie_str = "; ".join([f"{k}={v}" for k, v in cookies.items()])
             
             return ws_url, cookie_str, user_agent
+        else:
+            logging.warning(f"Bilet alma başarısız yanıt: {data}")
     except Exception as e:
-        logging.error(f"Bilet alma hatası: {e}")
+        logging.error(f"Bilet alma istisnası: {e}")
     return None, None, None
 
 async def listen_live_feed():
@@ -167,8 +185,6 @@ async def listen_live_feed():
             continue
 
         logging.info("WebSocket bağlantısı kuruluyor...")
-        
-        # 403 engelini aşmak için çerezler ve tarayıcı başlığı ekleniyor
         ws_headers = {
             "User-Agent": user_agent,
             "Origin": "https://dichvu321.com",
