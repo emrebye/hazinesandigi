@@ -1,2 +1,4 @@
-playwright
+cloudscraper
+websockets
 requests
+playwright
