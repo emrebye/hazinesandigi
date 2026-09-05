@@ -8,7 +8,6 @@ import websockets
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from threading import Thread
 
-# Cloudflare / Anti-Bot korumasını aşmak için cloudscraper denemesi
 try:
     import cloudscraper
     scraper = cloudscraper.create_scraper(
@@ -133,13 +132,10 @@ async def send_telegram(mesaj):
         logging.error(f"Telegram Gönderim Hatası: {e}")
 
 def get_websocket_ticket():
-    """Cloudflare bypass ile ana sayfadan çerez alır, ardından bilet isteği atar."""
     try:
         user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
-        
         client = scraper if USE_SCRAPER else http_session
 
-        # 1. Ana sayfaya gidip oturum çerezi üret
         client.get(PAGE_URL, headers={"User-Agent": user_agent}, timeout=10)
 
         headers = {
@@ -153,7 +149,6 @@ def get_websocket_ticket():
             "Sec-Fetch-Site": "same-origin"
         }
 
-        # 2. Bilet isteği at
         res = client.get(BOOTSTRAP_URL, headers=headers, timeout=10)
         
         if res.status_code != 200 or not res.text.strip().startswith("{"):
@@ -192,13 +187,15 @@ async def listen_live_feed():
         }
         
         try:
+            # ping_interval=None ile zaman aşımı kesilmeleri engellendi
             async with websockets.connect(
                 ws_url,
                 additional_headers=ws_headers,
-                ping_interval=20,
-                ping_timeout=10
+                ping_interval=None,
+                ping_timeout=None,
+                close_timeout=10
             ) as websocket:
-                logging.info("✅ WebSocket bağlantısı başarılı! Akış dinleniyor...")
+                logging.info("✅ WebSocket bağlantısı başarılı! Akış kesintisiz dinleniyor...")
 
                 async for message in websocket:
                     try:
