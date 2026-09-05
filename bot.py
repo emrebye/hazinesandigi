@@ -3,11 +3,22 @@ import json
 import asyncio
 import logging
 import requests
+import subprocess
+import sys
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from threading import Thread
-from playwright.async_api import async_playwright
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+# Runtime ortamında Chromium yoksa otomatik kur
+logging.info("Chromium sürücüsü kontrol ediliyor ve yükleniyor...")
+try:
+    subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+    logging.info("✅ Chromium sürücüsü hazır.")
+except Exception as e:
+    logging.error(f"Chromium kurulum hatası: {e}")
+
+from playwright.async_api import async_playwright
 
 TELEGRAM_BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -105,7 +116,7 @@ async def main():
                     if res:
                         clean_username, coins, data = res
                         box_type = str(data.get("type") or "HAZİNE SANDIĞI").upper()
-                        viewers = data.get("viewers", payload.get("viewerCount", 0))
+                        viewers = data.get("viewers", data.get("viewerCount", 0))
                         live_link = f"https://www.tiktok.com/@{clean_username}/live"
 
                         mesaj = (
