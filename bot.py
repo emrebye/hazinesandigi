@@ -1,4 +1,5 @@
-import os, json, time, asyncio, logging, requests
+import os, json, time, asyncio, logging
+import cloudscraper
 import websockets
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from threading import Thread
@@ -20,11 +21,13 @@ CHAT_ID = os.getenv("CHAT_ID")
 MIN_COINS = int(os.getenv("MIN_COINS", "1"))
 PROCESSED_CACHE = {}
 
+scraper = cloudscraper.create_scraper()
+
 async def send_telegram(mesaj):
     if not TELEGRAM_BOT_TOKEN or not CHAT_ID: return
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        await asyncio.to_thread(requests.post, url, json={"chat_id": CHAT_ID, "text": mesaj, "parse_mode": "HTML", "disable_web_page_preview": True}, timeout=5)
+        await asyncio.to_thread(scraper.post, url, json={"chat_id": CHAT_ID, "text": mesaj, "parse_mode": "HTML", "disable_web_page_preview": True}, timeout=5)
     except Exception: pass
 
 def process_item(username, coins, box_type="HAZİNE SANDIĞI"):
@@ -42,17 +45,17 @@ def process_item(username, coins, box_type="HAZİNE SANDIĞI"):
     asyncio.create_task(send_telegram(mesaj))
 
 async def get_ws_ticket_and_path():
-    """Sitenin bilet ürettiği ana kapıya istek atıp şifreli tünel yolunu alır"""
     url = "https://dichvu321.com/proxy.php?transport=ws&mode=bootstrap&stream=box&live=1000"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-        "Referer": "https://dichvu321.com/en/tiktok-treasure-box-bot/"
+        "Referer": "https://dichvu321.com/en/tiktok-treasure-box-bot/",
+        "Content-Type": "application/json"
     }
     try:
-        response = await asyncio.to_thread(requests.post, url, headers=headers, timeout=10)
+        response = await asyncio.to_thread(scraper.post, url, headers=headers, timeout=10)
         data = response.json()
         if data.get("success"):
-            path = data.get("path") # Örn: /live-feed?ticket=eyJ...
+            path = data.get("path")
             return f"wss://dichvu321.com{path}"
     except Exception as e:
         logging.error(f"Bilet alma hatası: {e}")
@@ -62,14 +65,14 @@ async def listen_to_feed():
     while True:
         ws_url = await get_ws_ticket_and_path()
         if not ws_url:
-            logging.warning("Bilet alınamadı, 5 saniye sonra tekrar denenecek...")
+            logging.warning("Bilet alınamadı, 5 saniye sonra tekrar deneniyor...")
             await asyncio.sleep(5)
             continue
 
         logging.info("Doğrudan WebSocket tüneline bağlanılıyor...")
         try:
             async with websockets.connect(ws_url, ping_interval=20) as websocket:
-                logging.info("✅ Tünel bağlantısı başarılı! Veriler dinleniyor...")
+                logging.info("✅ Tünel bağlantısı başarılı! Veriler akıyor...")
                 async for message in websocket:
                     try:
                         data = json.loads(message)
@@ -84,11 +87,11 @@ async def listen_to_feed():
                     except Exception:
                         pass
         except Exception as e:
-            logging.warning(f"Tünel bağlantısı koptu veya bilet bitti: {e}. Yeniden bilet alınıyor...")
+            logging.warning(f"Tünel koptu veya bilet bitti: {e}. Yeniden bilet alınıyor...")
             await asyncio.sleep(3)
 
 async def main():
-    await send_telegram("🤖 <b>Çekirdek Bot Başlatıldı!</b> Ana omurgaya bağlanılıyor...")
+    await send_telegram("🤖 <b>Çekirdek Bot Başlatıldı!</b> F12 tüneli aktif...")
     await listen_to_feed()
 
 if __name__ == "__main__":
