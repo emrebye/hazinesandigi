@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import asyncio
 import logging
 import requests
@@ -28,7 +29,6 @@ TELEGRAM_BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 MIN_COINS = int(os.getenv("MIN_COINS", "1"))
 
-# Tekrarlanan bildirimleri engellemek için hafıza listesi
 PROCESSED_IDS = set()
 
 async def send_telegram(mesaj):
@@ -49,48 +49,19 @@ async def send_telegram(mesaj):
     except Exception as e:
         logging.error(f"Telegram Gönderim Hatası: {e}")
 
-def process_single_item(item):
-    if not isinstance(item, dict):
-        return
-
-    # Benzersiz ID kontrolü (Aynı sandığı tekrar atmamak için)
-    event_id = item.get("id") or item.get("_id") or item.get("time") or item.get("uniqueId")
-    username = (
-        item.get("uniqueId")
-        or item.get("username")
-        or item.get("nickname")
-        or item.get("author")
-        or item.get("anchor")
-        or item.get("host")
-        or ""
-    )
+def process_item(username, coins, box_type="HAZİNE SANDIĞI", viewers=0):
     clean_username = str(username).replace("@", "").strip().lower()
-    if not clean_username:
+    if not clean_username or coins < MIN_COINS:
         return
 
-    coins = 0
-    for key in ["coins", "diamonds", "totalCoins", "val", "amount"]:
-        if item.get(key) is not None:
-            try:
-                coins = int(item[key])
-                break
-            except (ValueError, TypeError):
-                pass
-
-    if coins < MIN_COINS:
-        return
-
-    dedup_key = f"{clean_username}_{coins}_{event_id}"
+    dedup_key = f"{clean_username}_{coins}"
     if dedup_key in PROCESSED_IDS:
         return
     PROCESSED_IDS.add(dedup_key)
 
-    box_type = str(item.get("type") or "HAZİNE SANDIĞI").upper()
-    viewers = item.get("viewers", item.get("viewerCount", 0))
     live_link = f"https://www.tiktok.com/@{clean_username}/live"
-
     mesaj = (
-        f"🎁 <b>{box_type}</b>\n\n"
+        f"🎁 <b>{box_type.upper()}</b>\n\n"
         f"👤 <b>YAYINCI:</b> @{clean_username}\n"
         f"👁️ <b>İZLEYİCİ:</b> {viewers}\n"
         f"💎 <b>ELMAS:</b> {coins}\n\n"
@@ -102,28 +73,53 @@ def process_single_item(item):
 def parse_and_process(raw_str):
     try:
         data = json.loads(raw_str)
-        
-        # Liste halinde geldiyse (Recent events gibi)
-        if isinstance(data, list):
-            for item in data:
-                process_single_item(item)
-            return
-
-        # Tekil obje geldiyse
-        if isinstance(data, dict):
-            payload = data.get("data")
-            if isinstance(payload, list):
-                for item in payload:
-                    process_single_item(item)
-            elif isinstance(payload, dict):
-                process_single_item(payload)
-            else:
-                process_single_item(data)
+        items = data if isinstance(data, list) else [data.get("data", data)]
+        for item in items:
+            if not isinstance(item, dict) or item.get("status") == "connected":
+                continue
+            username = item.get("uniqueId") or item.get("username") or item.get("nickname") or item.get("author") or ""
+            coins = 0
+            for k in ["coins", "diamonds", "totalCoins", "val", "amount"]:
+                if item.get(k) is not None:
+                    try:
+                        coins = int(item[k])
+                        break
+                    except (ValueError, TypeError):
+                        pass
+            box_type = str(item.get("type") or "HAZİNE SANDIĞI")
+            viewers = item.get("viewers", item.get("viewerCount", 0))
+            process_item(username, coins, box_type, viewers)
     except Exception:
         pass
 
+async def scrape_dom_cards(page):
+    try:
+        cards = await page.query_selector_all("div")
+        for card in cards:
+            text = await card.inner_text()
+            if ("coins" in text.lower() or "goody bag" in text.lower() or "treasure box" in text.lower()) and "@" in text:
+                lines = [l.strip() for l in text.split("\n") if l.strip()]
+                username = ""
+                coins = 0
+                box_type = "HAZİNE SANDIĞI"
+                for line in lines:
+                    if "@" in line:
+                        username = line.split()[0]
+                    if "coin" in line.lower():
+                        m = re.search(r'(\d+)\s*coin', line, re.IGNORECASE)
+                        if m:
+                            coins = int(m.group(1))
+                    if "goody bag" in line.lower():
+                        box_type = "GOODY BAG"
+                    elif "treasure box" in line.lower():
+                        box_type = "TREASURE BOX"
+                if username and coins > 0:
+                    process_item(username, coins, box_type)
+    except Exception as e:
+        pass
+
 async def main():
-    await send_telegram("🤖 <b>Playwright Bot Başlatıldı!</b> Sayfa verileri ve canlı akış izleniyor...")
+    await send_telegram("🤖 <b>Playwright Bot Başlatıldı!</b> Canlı ve sayfa verileri izleniyor...")
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -135,37 +131,35 @@ async def main():
         )
         page = await context.new_page()
 
-        # 1. HTTP İsteklerini Yakalama (Sayfa açıldığında gelen "Recent events" API verileri için)
-        async def on_response(response):
+        async def on_response(res):
             try:
-                if "json" in response.headers.get("content-type", "").lower():
-                    text = await response.text()
-                    parse_and_process(text)
+                if "json" in res.headers.get("content-type", "").lower():
+                    parse_and_process(await res.text())
             except Exception:
                 pass
 
         page.on("response", lambda res: asyncio.create_task(on_response(res)))
 
-        # 2. WebSocket Yakalama (Anlık gelen canlı sandıklar için)
         def on_websocket(ws):
             logging.info(f"🌐 WebSocket Yakalandı: {ws.url}")
-
-            def on_frame_received(frame_data):
-                try:
-                    payload_str = frame_data.decode('utf-8', errors='ignore') if isinstance(frame_data, bytes) else str(frame_data)
-                    parse_and_process(payload_str)
-                except Exception as e:
-                    logging.error(f"Frame hatası: {e}")
-
-            ws.on("framereceived", on_frame_received)
+            def on_frame(frame_data):
+                payload_str = frame_data.decode('utf-8', errors='ignore') if isinstance(frame_data, bytes) else str(frame_data)
+                parse_and_process(payload_str)
+            ws.on("framereceived", on_frame)
 
         page.on("websocket", on_websocket)
 
         logging.info("dichvu321 sayfasına bağlanılıyor...")
-        await page.goto("https://dichvu321.com/en/tiktok-treasure-box-bot/", wait_until="networkidle", timeout=60000)
+        await page.goto("https://dichvu321.com/en/tiktok-treasure-box-bot/", wait_until="domcontentloaded", timeout=60000)
         
+        # Sayfa açıldıktan sonra ekrandaki mevcut kartları tara
+        await asyncio.sleep(5)
+        await scrape_dom_cards(page)
+
+        # Arka planda 20 saniyede bir ekrandaki yeni kartları ve canlı akışı kontrol etmeye devam et
         while True:
-            await asyncio.sleep(60)
+            await asyncio.sleep(20)
+            await scrape_dom_cards(page)
 
 if __name__ == "__main__":
     logging.info("Bot Başlatılıyor...")
