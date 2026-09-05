@@ -31,14 +31,6 @@ MIN_COINS = int(os.getenv("MIN_COINS", "1"))
 
 PROCESSED_IDS = set()
 
-def get_country_flag(code):
-    if not code or len(str(code)) != 2:
-        return "🌐"
-    try:
-        return chr(ord(code[0].upper()) + 127397) + chr(ord(code[1].upper()) + 127397)
-    except Exception:
-        return "🌐"
-
 async def send_telegram(mesaj):
     if not TELEGRAM_BOT_TOKEN or not CHAT_ID:
         logging.error("Telegram BOT_TOKEN veya CHAT_ID eksik!")
@@ -57,7 +49,7 @@ async def send_telegram(mesaj):
     except Exception as e:
         logging.error(f"Telegram Gönderim Hatası: {e}")
 
-def process_item(username, coins, box_type="TREASURE BOX", viewers=0, country=""):
+def process_item(username, coins, box_type="HAZİNE SANDIĞI", viewers=0):
     clean_username = str(username).replace("@", "").strip().lower()
     if not clean_username or coins < MIN_COINS:
         return
@@ -67,21 +59,13 @@ def process_item(username, coins, box_type="TREASURE BOX", viewers=0, country=""
         return
     PROCESSED_IDS.add(dedup_key)
 
-    # Hafıza şişmesini önle
-    if len(PROCESSED_IDS) > 300:
-        PROCESSED_IDS.clear()
-
-    flag = get_country_flag(country)
-    viewers_count = int(viewers) if viewers else 1
-    rate = round(coins / viewers_count, 1) if viewers_count > 0 else 1.0
     live_link = f"https://www.tiktok.com/@{clean_username}/live"
-
     mesaj = (
-        f"🎁 <b>## {box_type.upper()}</b> > <code>@{clean_username}</code>\n"
-        f"💎 <b>ELMAS:</b> {coins} {flag}\n"
-        f"👁️ <b>İZLEYİCİ:</b> {viewers_count} 👀\n"
-        f"📈 <b>ORAN (Rate):</b> {rate}\n\n"
-        f"⚡ <a href='{live_link}'>YAYINA GİT (TikTok)</a>"
+        f"🎁 <b>{box_type.upper()}</b>\n\n"
+        f"👤 <b>YAYINCI:</b> @{clean_username}\n"
+        f"👁️ <b>İZLEYİCİ:</b> {viewers}\n"
+        f"💎 <b>ELMAS:</b> {coins}\n\n"
+        f"⚡ <a href='{live_link}'>YAYINA GİT</a>"
     )
     asyncio.create_task(send_telegram(mesaj))
     logging.info(f"🔥 HAZİNE YAKALANDI: @{clean_username} ({coins} Elmas)")
@@ -102,11 +86,9 @@ def parse_and_process(raw_str):
                         break
                     except (ValueError, TypeError):
                         pass
-            box_type = str(item.get("type") or "TREASURE BOX")
-            viewers = item.get("viewers") or item.get("viewerCount") or item.get("userCount") or 0
-            country = item.get("country") or item.get("region") or item.get("nation") or ""
-            
-            process_item(username, coins, box_type, viewers, country)
+            box_type = str(item.get("type") or "HAZİNE SANDIĞI")
+            viewers = item.get("viewers", item.get("viewerCount", 0))
+            process_item(username, coins, box_type, viewers)
     except Exception:
         pass
 
@@ -114,39 +96,30 @@ async def scrape_dom_cards(page):
     try:
         cards = await page.query_selector_all("div")
         for card in cards:
-            try:
-                text = await card.inner_text()
-                if "@" in text and ("coin" in text.lower() or "goody" in text.lower() or "treasure" in text.lower()):
-                    lines = [l.strip() for l in text.split("\n") if l.strip()]
-                    username = ""
-                    coins = 0
-                    box_type = "TREASURE BOX"
-                    
-                    for line in lines:
-                        if "@" in line:
-                            parts = line.split()
-                            for p in parts:
-                                if p.startswith("@"):
-                                    username = p
-                                    break
-                        if "coin" in line.lower():
-                            m = re.search(r'(\d+)\s*coin', line, re.IGNORECASE)
-                            if m:
-                                coins = int(m.group(1))
-                        if "goody" in line.lower():
-                            box_type = "GOODY BAG"
-                        elif "treasure" in line.lower():
-                            box_type = "TREASURE BOX"
-                            
-                    if username and coins > 0:
-                        process_item(username, coins, box_type)
-            except Exception:
-                continue
+            text = await card.inner_text()
+            if ("coins" in text.lower() or "goody bag" in text.lower() or "treasure box" in text.lower()) and "@" in text:
+                lines = [l.strip() for l in text.split("\n") if l.strip()]
+                username = ""
+                coins = 0
+                box_type = "HAZİNE SANDIĞI"
+                for line in lines:
+                    if "@" in line:
+                        username = line.split()[0]
+                    if "coin" in line.lower():
+                        m = re.search(r'(\d+)\s*coin', line, re.IGNORECASE)
+                        if m:
+                            coins = int(m.group(1))
+                    if "goody bag" in line.lower():
+                        box_type = "GOODY BAG"
+                    elif "treasure box" in line.lower():
+                        box_type = "TREASURE BOX"
+                if username and coins > 0:
+                    process_item(username, coins, box_type)
     except Exception as e:
         pass
 
 async def main():
-    await send_telegram("🤖 <b>Bot Orijinal Moda Döndürüldü!</b> Kesintisiz akış hazır.")
+    await send_telegram("🤖 <b>Playwright Bot Başlatıldı!</b> Canlı ve sayfa verileri izleniyor...")
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -176,16 +149,17 @@ async def main():
 
         page.on("websocket", on_websocket)
 
-        logging.info("Sayfa açılıyor...")
+        logging.info("dichvu321 sayfasına bağlanılıyor...")
         await page.goto("https://dichvu321.com/en/tiktok-treasure-box-bot/", wait_until="domcontentloaded", timeout=60000)
+        
+        # Sayfa açıldıktan sonra ekrandaki mevcut kartları tara
+        await asyncio.sleep(5)
+        await scrape_dom_cards(page)
 
+        # Arka planda 20 saniyede bir ekrandaki yeni kartları ve canlı akışı kontrol etmeye devam et
         while True:
-            try:
-                await scrape_dom_cards(page)
-                await asyncio.sleep(5)
-            except Exception as e:
-                logging.error(f"Hata: {e}")
-                await asyncio.sleep(5)
+            await asyncio.sleep(20)
+            await scrape_dom_cards(page)
 
 if __name__ == "__main__":
     logging.info("Bot Başlatılıyor...")
