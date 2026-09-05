@@ -10,7 +10,7 @@ from threading import Thread
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# Render Canlı Tutan Dummy HTTP Sunucusu
+# Render Web Servis Sürdürme Sunucusu
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -36,7 +36,6 @@ UPSTASH_URL = os.getenv("UPSTASH_REDIS_REST_URL")
 UPSTASH_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN")
 CACHE_TIMEOUT = 15
 
-# Oturum ve Çerez Yönetimi
 http_session = requests.Session()
 LOCAL_CACHE = {}
 
@@ -123,59 +122,59 @@ async def send_telegram(mesaj):
     except Exception as e:
         logging.error(f"Telegram Gönderim Hatası: {e}")
 
-def get_websocket_url():
-    """Önce ana sayfayı ziyaret edip çerez alır, ardından bilet ister."""
+def get_websocket_ticket():
+    """Ana sayfadan çerez alıp bilet isteğini atar, URL ve Çerez başlığını döner."""
     try:
-        # 1. Adım: Ana Sayfayı Ziyaret Et (Oturum Çerezi Oluştur)
-        page_headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9"
-        }
-        http_session.get(PAGE_URL, headers=page_headers, timeout=10)
+        user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+        
+        # 1. Oturum çerezlerini oluştur
+        http_session.get(PAGE_URL, headers={"User-Agent": user_agent}, timeout=10)
 
-        # 2. Adım: Bilet İsteği Gönder (Browser/AJAX Başlıklarıyla)
         ajax_headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+            "User-Agent": user_agent,
             "Origin": "https://dichvu321.com",
             "Referer": PAGE_URL,
             "Accept": "application/json, text/javascript, */*; q=0.01",
-            "X-Requested-With": "XMLHttpRequest",
-            "Sec-Fetch-Dest": "empty",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Site": "same-origin"
+            "X-Requested-With": "XMLHttpRequest"
         }
 
         res = http_session.get(BOOTSTRAP_URL, headers=ajax_headers, timeout=10)
         data = res.json()
 
         if not data.get("success"):
-            # POST Denemesi
             res = http_session.post(BOOTSTRAP_URL, headers=ajax_headers, timeout=10)
             data = res.json()
 
         if data.get("success"):
             path = data.get("path", "").replace("\\/", "/")
-            return f"wss://dichvu321.com{path}"
-        else:
-            logging.warning(f"Bilet alma başarısız: {data}")
+            ws_url = f"wss://dichvu321.com{path}"
+            
+            # Oluşan çerezleri string formatına çevir
+            cookies = http_session.cookies.get_dict()
+            cookie_str = "; ".join([f"{k}={v}" for k, v in cookies.items()])
+            
+            return ws_url, cookie_str, user_agent
     except Exception as e:
         logging.error(f"Bilet alma hatası: {e}")
-    return None
+    return None, None, None
 
 async def listen_live_feed():
     while True:
-        ws_url = await asyncio.to_thread(get_websocket_url)
+        ws_url, cookie_str, user_agent = await asyncio.to_thread(get_websocket_ticket)
         if not ws_url:
             logging.warning("WebSocket URL alınamadı, 10 saniye sonra tekrar deneniyor...")
             await asyncio.sleep(10)
             continue
 
         logging.info("WebSocket bağlantısı kuruluyor...")
+        
+        # 403 engelini aşmak için çerezler ve tarayıcı başlığı ekleniyor
         ws_headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-            "Origin": "https://dichvu321.com"
+            "User-Agent": user_agent,
+            "Origin": "https://dichvu321.com",
+            "Cookie": cookie_str
         }
+        
         try:
             async with websockets.connect(
                 ws_url,
