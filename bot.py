@@ -4,7 +4,6 @@ import re
 import asyncio
 import logging
 import requests
-from collections import deque
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from threading import Thread
 from playwright.async_api import async_playwright
@@ -30,8 +29,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 MIN_COINS = int(os.getenv("MIN_COINS", "1"))
 
-# Son 150 sandığı hafızada tutar, eskileri otomatik siler (Tıkanmayı önler)
-PROCESSED_IDS = deque(maxlen=150)
+PROCESSED_IDS = set()
 
 def get_country_flag(code):
     if not code or len(str(code)) != 2:
@@ -67,7 +65,11 @@ def process_item(username, coins, box_type="TREASURE BOX", viewers=0, country=""
     dedup_key = f"{clean_username}_{coins}"
     if dedup_key in PROCESSED_IDS:
         return
-    PROCESSED_IDS.append(dedup_key)
+    PROCESSED_IDS.add(dedup_key)
+
+    # Hafıza şişmesini önle
+    if len(PROCESSED_IDS) > 300:
+        PROCESSED_IDS.clear()
 
     flag = get_country_flag(country)
     viewers_count = int(viewers) if viewers else 1
@@ -144,7 +146,7 @@ async def scrape_dom_cards(page):
         pass
 
 async def main():
-    await send_telegram("🤖 <b>Playwright Bot Yeniden Başlatıldı!</b> Akış yenilendi.")
+    await send_telegram("🤖 <b>Bot Orijinal Moda Döndürüldü!</b> Kesintisiz akış hazır.")
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -174,20 +176,15 @@ async def main():
 
         page.on("websocket", on_websocket)
 
+        logging.info("Sayfa açılıyor...")
+        await page.goto("https://dichvu321.com/en/tiktok-treasure-box-bot/", wait_until="domcontentloaded", timeout=60000)
+
         while True:
             try:
-                logging.info("🔄 Sayfa yükleniyor...")
-                # Ağ bağlantısının tam oturması için networkidle kullanıyoruz
-                await page.goto("https://dichvu321.com/en/tiktok-treasure-box-bot/", wait_until="networkidle", timeout=60000)
-                
-                # Ekrandaki ilk verileri tara
                 await scrape_dom_cards(page)
-
-                # 2 dakikada bir sayfayı tazeleyip canlı akışı kesintisiz tut
-                logging.info("⏳ Canlı akış izleniyor (2 dakika)...")
-                await asyncio.sleep(120)
+                await asyncio.sleep(5)
             except Exception as e:
-                logging.error(f"Döngü Hatası: {e}")
+                logging.error(f"Hata: {e}")
                 await asyncio.sleep(5)
 
 if __name__ == "__main__":
