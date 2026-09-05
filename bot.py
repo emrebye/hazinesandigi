@@ -4,6 +4,7 @@ import re
 import asyncio
 import logging
 import requests
+from collections import deque
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from threading import Thread
 from playwright.async_api import async_playwright
@@ -29,10 +30,10 @@ TELEGRAM_BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 MIN_COINS = int(os.getenv("MIN_COINS", "1"))
 
-PROCESSED_IDS = set()
+# Son 150 sandığı hafızada tutar, eskileri otomatik siler (Tıkanmayı önler)
+PROCESSED_IDS = deque(maxlen=150)
 
 def get_country_flag(code):
-    """Ülke kodunu (TR, JP, US) bayrak emojisine dönüştürür."""
     if not code or len(str(code)) != 2:
         return "🌐"
     try:
@@ -58,7 +59,7 @@ async def send_telegram(mesaj):
     except Exception as e:
         logging.error(f"Telegram Gönderim Hatası: {e}")
 
-def process_item(username, coins, box_type="HAZİNE SANDIĞI", viewers=0, country=""):
+def process_item(username, coins, box_type="TREASURE BOX", viewers=0, country=""):
     clean_username = str(username).replace("@", "").strip().lower()
     if not clean_username or coins < MIN_COINS:
         return
@@ -66,14 +67,13 @@ def process_item(username, coins, box_type="HAZİNE SANDIĞI", viewers=0, countr
     dedup_key = f"{clean_username}_{coins}"
     if dedup_key in PROCESSED_IDS:
         return
-    PROCESSED_IDS.add(dedup_key)
+    PROCESSED_IDS.append(dedup_key)
 
     flag = get_country_flag(country)
     viewers_count = int(viewers) if viewers else 1
     rate = round(coins / viewers_count, 1) if viewers_count > 0 else 1.0
     live_link = f"https://www.tiktok.com/@{clean_username}/live"
 
-    # Görseldeki tasarıma uygun Telegram mesaj şablonu
     mesaj = (
         f"🎁 <b>## {box_type.upper()}</b> > <code>@{clean_username}</code>\n"
         f"💎 <b>ELMAS:</b> {coins} {flag}\n"
@@ -144,7 +144,7 @@ async def scrape_dom_cards(page):
         pass
 
 async def main():
-    await send_telegram("🤖 <b>Playwright Bot Aktif!</b> Gelişmiş tasarım modu başlatıldı.")
+    await send_telegram("🤖 <b>Playwright Bot Yeniden Başlatıldı!</b> Akış yenilendi.")
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -177,17 +177,18 @@ async def main():
         while True:
             try:
                 logging.info("🔄 Sayfa yükleniyor...")
-                await page.goto("https://dichvu321.com/en/tiktok-treasure-box-bot/", wait_until="domcontentloaded", timeout=60000)
+                # Ağ bağlantısının tam oturması için networkidle kullanıyoruz
+                await page.goto("https://dichvu321.com/en/tiktok-treasure-box-bot/", wait_until="networkidle", timeout=60000)
                 
-                for _ in range(5):
-                    await asyncio.sleep(2)
-                    await scrape_dom_cards(page)
+                # Ekrandaki ilk verileri tara
+                await scrape_dom_cards(page)
 
-                logging.info("⏳ Canlı akış dinleniyor (3 dakika)...")
-                await asyncio.sleep(180)
+                # 2 dakikada bir sayfayı tazeleyip canlı akışı kesintisiz tut
+                logging.info("⏳ Canlı akış izleniyor (2 dakika)...")
+                await asyncio.sleep(120)
             except Exception as e:
                 logging.error(f"Döngü Hatası: {e}")
-                await asyncio.sleep(10)
+                await asyncio.sleep(5)
 
 if __name__ == "__main__":
     logging.info("Bot Başlatılıyor...")
