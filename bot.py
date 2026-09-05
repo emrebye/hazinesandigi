@@ -1,175 +1,171 @@
-import os, sys, json, time, asyncio, logging
-import cloudscraper
-import websockets
+import os
+import json
+import re
+import asyncio
+import logging
+import requests
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from threading import Thread
+from playwright.async_api import async_playwright
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s", stream=sys.stdout)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
-    def do_HEAD(self):
-        self.send_response(200)
-        self.end_headers()
-
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Bot Aktif!")
+        self.wfile.write(b"Bot Active!")
+
+    def log_message(self, format, *args):
+        pass
 
 def run_dummy_server():
-    try:
-        port = int(os.environ.get("PORT", 8080))
-        server = HTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler)
-        logging.info(f"Port {port} uzerinde HTTP sunucu acildi.")
-        server.serve_forever()
-    except Exception as e:
-        logging.error(f"HTTP Sunucu hatasi: {e}")
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler)
+    logging.info(f"🌐 Dummy HTTP Server {port} portunda çalışıyor.")
+    server.serve_forever()
 
 TELEGRAM_BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 MIN_COINS = int(os.getenv("MIN_COINS", "1"))
-PROCESSED_CACHE = {}
 
-scraper = cloudscraper.create_scraper(
-    browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True}
-)
+PROCESSED_IDS = set()
 
 async def send_telegram(mesaj):
     if not TELEGRAM_BOT_TOKEN or not CHAT_ID:
+        logging.error("Telegram BOT_TOKEN veya CHAT_ID eksik!")
         return
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": mesaj,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True
+    }
     try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        await asyncio.to_thread(scraper.post, url, json={
-            "chat_id": CHAT_ID, 
-            "text": mesaj, 
-            "parse_mode": "HTML", 
-            "disable_web_page_preview": True
-        }, timeout=8)
+        await asyncio.to_thread(requests.post, url, json=payload, timeout=5)
+        logging.info("✅ Telegram mesajı iletildi.")
     except Exception as e:
-        logging.error(f"Telegram Hatasi: {e}")
+        logging.error(f"Telegram Gönderim Hatası: {e}")
 
 def process_item(username, coins, box_type="HAZİNE SANDIĞI", viewers=0):
     clean_username = str(username).replace("@", "").strip().lower()
     if not clean_username or coins < MIN_COINS:
         return
-    
+
     dedup_key = f"{clean_username}_{coins}"
-    if dedup_key in PROCESSED_CACHE and (time.time() - PROCESSED_CACHE[dedup_key]) < 60:
+    if dedup_key in PROCESSED_IDS:
         return
+    PROCESSED_IDS.add(dedup_key)
 
-    PROCESSED_CACHE[dedup_key] = time.time()
-    if len(PROCESSED_CACHE) > 500:
-        PROCESSED_CACHE.clear()
+    # Bellek şişmesini önlemek için liste çok büyürse sıfırla
+    if len(PROCESSED_IDS) > 500:
+        PROCESSED_IDS.clear()
 
-    logging.info(f"🎯 Sandık Yakalandı: @{clean_username} ({coins} Coin)")
-    turkce_tur = "HAZİNE SANDIĞI" if "box" in box_type.lower() else "ŞANSLI KESE"
+    live_link = f"https://www.tiktok.com/@{clean_username}/live"
     mesaj = (
-        f"🎁 <b>{turkce_tur}</b>\n\n"
+        f"🎁 <b>{box_type.upper()}</b>\n\n"
         f"👤 <b>YAYINCI:</b> @{clean_username}\n"
-        f"💎 <b>ELMAS:</b> {coins}\n"
-        f"👥 <b>İZLEYİCİ:</b> {viewers}\n\n"
-        f"⚡ <a href='https://www.tiktok.com/@{clean_username}/live'>YAYINA GİT</a>"
+        f"👁️ <b>İZLEYİCİ:</b> {viewers}\n"
+        f"💎 <b>ELMAS:</b> {coins}\n\n"
+        f"⚡ <a href='{live_link}'>YAYINA GİT</a>"
     )
     asyncio.create_task(send_telegram(mesaj))
+    logging.info(f"🔥 HAZİNE YAKALANDI: @{clean_username} ({coins} Elmas)")
 
-async def init_session_and_get_ticket():
-    main_url = "https://dichvu321.com/en/tiktok-treasure-box-bot/"
-    proxy_url = "https://dichvu321.com/proxy.php?transport=ws&mode=bootstrap&stream=box&live=1000"
-    
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-        "Referer": main_url,
-        "Origin": "https://dichvu321.com",
-        "Accept": "application/json, text/javascript, */*; q=0.01",
-        "X-Requested-With": "XMLHttpRequest",
-        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"
-    }
-    
-    post_payload = {
-        "demo": "true",
-        "mode": "bootstrap",
-        "stream": "box"
-    }
-
+def parse_and_process(raw_str):
     try:
-        logging.info("1️⃣ Ana sayfaya gidiliyor...")
-        await asyncio.to_thread(scraper.get, main_url, headers=headers, timeout=15)
-        
-        logging.info("2️⃣ proxy.php'den bilet isteniyor...")
-        r2 = await asyncio.to_thread(scraper.post, proxy_url, data=post_payload, headers=headers, timeout=15)
-        logging.info(f"2️⃣ Bilet yanıt kodu: {r2.status_code}")
-        logging.info(f"2️⃣ Bilet ham yanıtı: {r2.text[:150]}")
-        
-        data = r2.json()
-        if data.get("success") and data.get("path"):
-            return f"wss://dichvu321.com{data.get('path')}"
-        else:
-            logging.warning(f"⚠️ Bilet reddedildi: {data}")
-    except Exception as e:
-        logging.error(f"❌ Oturum hatası: {e}")
-    return None
-
-async def listen_to_feed():
-    while True:
-        ws_url = await init_session_and_get_ticket()
-        if not ws_url:
-            logging.warning("⏳ Bilet alınamadı. 5 saniye sonra tekrar deneniyor...")
-            await asyncio.sleep(5)
-            continue
-
-        try:
-            ws_headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-                "Origin": "https://dichvu321.com"
-            }
-            cookie_str = "; ".join([f"{k}={v}" for k, v in scraper.cookies.get_dict().items()])
-            if cookie_str:
-                ws_headers["Cookie"] = cookie_str
-
-            async with websockets.connect(ws_url, ping_interval=20, extra_headers=ws_headers) as ws:
-                logging.info("🚀 TÜNEL AÇILDI! TikTok Canlı Veri Akışı Başladı.")
-                
-                async for message in ws:
-                    msg_str = message.decode('utf-8', 'ignore') if isinstance(message, bytes) else str(message)
-                    if msg_str in ["ping", "pong", "{}"]: 
-                        continue
-                    
+        data = json.loads(raw_str)
+        items = data if isinstance(data, list) else [data.get("data", data)]
+        for item in items:
+            if not isinstance(item, dict) or item.get("status") == "connected":
+                continue
+            username = item.get("uniqueId") or item.get("username") or item.get("nickname") or item.get("author") or ""
+            coins = 0
+            for k in ["coins", "diamonds", "totalCoins", "val", "amount"]:
+                if item.get(k) is not None:
                     try:
-                        data = json.loads(msg_str)
-                        items = []
-                        if isinstance(data, dict):
-                            if "events" in data and isinstance(data["events"], list):
-                                items = data["events"]
-                            elif "data" in data:
-                                items = data["data"] if isinstance(data["data"], list) else [data["data"]]
-                            else:
-                                items = [data]
-                        elif isinstance(data, list):
-                            items = data
-                            
-                        for item in items:
-                            if not isinstance(item, dict): 
-                                continue
-                            username = item.get("uniqueId") or item.get("username") or ""
-                            coins = int(item.get("coins", 0) or item.get("diamonds", 0))
-                            box_type = str(item.get("type", "box"))
-                            viewers = int(item.get("viewerCount", 0))
-                            
-                            if username and coins > 0:
-                                process_item(username, coins, box_type, viewers)
-                    except Exception:
+                        coins = int(item[k])
+                        break
+                    except (ValueError, TypeError):
                         pass
-                        
-        except Exception as e:
-            logging.warning(f"⚠️ Tünel koptu ({e}). Yeniden bağlanılacak...")
-            await asyncio.sleep(3)
+            box_type = str(item.get("type") or "HAZİNE SANDIĞI")
+            viewers = item.get("viewers", item.get("viewerCount", 0))
+            process_item(username, coins, box_type, viewers)
+    except Exception:
+        pass
+
+async def scrape_dom_cards(page):
+    try:
+        cards = await page.query_selector_all("div")
+        for card in cards:
+            text = await card.inner_text()
+            if ("coins" in text.lower() or "goody bag" in text.lower() or "treasure box" in text.lower()) and "@" in text:
+                lines = [l.strip() for l in text.split("\n") if l.strip()]
+                username = ""
+                coins = 0
+                box_type = "HAZİNE SANDIĞI"
+                for line in lines:
+                    if "@" in line:
+                        parts = line.split()
+                        if parts:
+                            username = parts[0]
+                    if "coin" in line.lower():
+                        m = re.search(r'(\d+)\s*coin', line, re.IGNORECASE)
+                        if m:
+                            coins = int(m.group(1))
+                    if "goody bag" in line.lower():
+                        box_type = "GOODY BAG"
+                    elif "treasure box" in line.lower():
+                        box_type = "TREASURE BOX"
+                if username and coins > 0:
+                    process_item(username, coins, box_type)
+    except Exception:
+        pass
 
 async def main():
-    logging.info("🏁 Bot aktif ediliyor...")
-    await send_telegram("🤖 <b>Bot Çekirdeği Başlatıldı!</b> Canlı sandık akışı devrede...")
-    await listen_to_feed()
+    await send_telegram("🤖 <b>Playwright Bot Başlatıldı!</b> Canlı ve sayfa verileri izleniyor...")
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+        )
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+        )
+        page = await context.new_page()
+
+        async def on_response(res):
+            try:
+                if "json" in res.headers.get("content-type", "").lower():
+                    parse_and_process(await res.text())
+            except Exception:
+                pass
+
+        page.on("response", lambda res: asyncio.create_task(on_response(res)))
+
+        def on_websocket(ws):
+            logging.info(f"🌐 WebSocket Yakalandı: {ws.url}")
+            def on_frame(frame_data):
+                payload_str = frame_data.decode('utf-8', errors='ignore') if isinstance(frame_data, bytes) else str(frame_data)
+                parse_and_process(payload_str)
+            ws.on("framereceived", on_frame)
+
+        page.on("websocket", on_websocket)
+
+        logging.info("dichvu321 sayfasına bağlanılıyor...")
+        await page.goto("https://dichvu321.com/en/tiktok-treasure-box-bot/", wait_until="domcontentloaded", timeout=60000)
+        
+        await asyncio.sleep(5)
+        await scrape_dom_cards(page)
+
+        while True:
+            await asyncio.sleep(20)
+            await scrape_dom_cards(page)
 
 if __name__ == "__main__":
-    t = Thread(target=run_dummy_server, daemon=True)
-    t.start()
+    logging.info("Bot Başlatılıyor...")
+    Thread(target=run_dummy_server, daemon=True).start()
     asyncio.run(main())
