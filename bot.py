@@ -21,10 +21,10 @@ def run_dummy_server():
     server = HTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler)
     server.serve_forever()
 
-# Genel Ayarlar (Gizli bilgiler Render ortam değişkenlerinden çekilir)
+# Genel Ayarlar (18 Bin Yayın Taraması Ayarlandı)
 TELEGRAM_BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
-PROXY_URL = "https://dichvu321.com/proxy.php?stream=all&live=5000"
+PROXY_URL = "https://dichvu321.com/proxy.php?stream=all&live=18000"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36",
@@ -43,6 +43,9 @@ LOCAL_CACHE = set()
 def is_already_taken_by_other_bot(clean_username):
     if clean_username in LOCAL_CACHE:
         return True
+
+    if not UPSTASH_URL or not UPSTASH_TOKEN:
+        return False
 
     cache_key = f"hazine:{clean_username}"
     headers = {"Authorization": f"Bearer {UPSTASH_TOKEN}"}
@@ -103,7 +106,7 @@ async def send_telegram(mesaj):
     if not TELEGRAM_BOT_TOKEN or not CHAT_ID:
         print("⚠️ Telegram token veya Chat ID eksik!")
         return
-        
+
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": CHAT_ID,
