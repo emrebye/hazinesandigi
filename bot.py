@@ -65,7 +65,7 @@ def to_int(value):
         if value is None or isinstance(value, bool):
             return None
         number = int(value)
-        if 0 <= number <= 10000:
+        if 0 <= number <= 100000:
             return number
     except Exception:
         pass
@@ -89,6 +89,23 @@ def recursive_find_key(obj, wanted_keys, path=""):
             if result[0] is not None:
                 return result
     return None, None
+
+def get_chest_coins(payload, envelope_info):
+    coin_keys = ["totaldiamondcount", "diamondcount", "coincount", "totalcoins", "coins"]
+    
+    # 1. Doğrudan Kontrol
+    for key in coin_keys:
+        val = envelope_info.get(key) or payload.get(key)
+        num = to_int(val)
+        if num is not None and num > 0:
+            return num
+            
+    # 2. Derinlemesine Derin Arama (Nested Search)
+    val, _ = recursive_find_key(payload, coin_keys)
+    if val is not None:
+        return val
+        
+    return 0
 
 def get_chest_recipients(payload):
     key_groups = [
@@ -172,16 +189,16 @@ async def listen_live_feed():
                         if not clean_username:
                             continue
 
+                        # Derin Elmas Tespiti
+                        coins = get_chest_coins(payload, envelope_info)
+
+                        # --- KESİN FİLTRE: 30 ELMAS VE ÜZERİ (30'DAN AZ İSE ATLA) ---
+                        if coins < 30:
+                            continue
+
                         taken = await asyncio.to_thread(is_already_taken_by_other_bot, clean_username)
                         if taken:
                             continue
-
-                        coins = (
-                            payload.get("coins")
-                            or envelope_info.get("diamondCount")
-                            or payload.get("diamondCount")
-                            or 0
-                        )
 
                         level = payload.get("level", 0)
                         try:
@@ -217,7 +234,7 @@ async def listen_live_feed():
                         )
 
                         asyncio.create_task(send_telegram(mesaj))
-                        print(f"HAZİNE: @{clean_username} | Elmas: {coins} | Dağıtılan: {recipients_text}")
+                        print(f"HAZİNE (>=30): @{clean_username} | Elmas: {coins} | Dağıtılan: {recipients_text}")
 
         except Exception as e:
             print(f"Bağlantı hatası: {e}")
