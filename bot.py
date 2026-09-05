@@ -1,84 +1,171 @@
-import asyncio
 import os
+import json
+import re
+import asyncio
+import logging
 import requests
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from threading import Thread
 from playwright.async_api import async_playwright
 
-# ==================== KULLANICI AYARLARI ====================
-# Takip etmek istediğin sitenin tam adresi (https:// ile başlasın)
-SİTE_URL = "https://example.com/live" 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# Telegram Bot Token ve Chat ID bilgilerin (Render Environment Variable olarak da alabilir)
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "BOT_TOKENINIZI_BURAYA_YAZIN")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "CHAT_IDNIZI_BURAYA_YAZIN")
-# ============================================================
+class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot Active!")
 
-def telegram_bildirim_gonder(mesaj):
-    """Telegram grubuna/kanalına bildirim gönderir."""
+    def log_message(self, format, *args):
+        pass
+
+def run_dummy_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler)
+    logging.info(f"🌐 Dummy HTTP Server {port} portunda çalışıyor.")
+    server.serve_forever()
+
+TELEGRAM_BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
+MIN_COINS = int(os.getenv("MIN_COINS", "1"))
+
+PROCESSED_IDS = set()
+
+async def send_telegram(mesaj):
+    if not TELEGRAM_BOT_TOKEN or not CHAT_ID:
+        logging.error("Telegram BOT_TOKEN veya CHAT_ID eksik!")
+        return
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": mesaj,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True
+    }
     try:
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        payload = {
-            "chat_id": CHAT_ID,
-            "text": mesaj,
-            "parse_mode": "HTML"
-        }
-        requests.post(url, json=payload, timeout=10)
+        await asyncio.to_thread(requests.post, url, json=payload, timeout=5)
+        logging.info("✅ Telegram mesajı iletildi.")
     except Exception as e:
-        print(f"Telegram mesajı gönderilirken hata oluştu: {e}")
+        logging.error(f"Telegram Gönderim Hatası: {e}")
 
-async def run():
+def process_item(username, coins, box_type="HAZİNE SANDIĞI", viewers=0):
+    clean_username = str(username).replace("@", "").strip().lower()
+    if not clean_username or coins < MIN_COINS:
+        return
+
+    dedup_key = f"{clean_username}_{coins}"
+    if dedup_key in PROCESSED_IDS:
+        return
+    PROCESSED_IDS.add(dedup_key)
+
+    # Bellek şişmesini önlemek için liste çok büyürse sıfırla
+    if len(PROCESSED_IDS) > 500:
+        PROCESSED_IDS.clear()
+
+    live_link = f"https://www.tiktok.com/@{clean_username}/live"
+    mesaj = (
+        f"🎁 <b>{box_type.upper()}</b>\n\n"
+        f"👤 <b>YAYINCI:</b> @{clean_username}\n"
+        f"👁️ <b>İZLEYİCİ:</b> {viewers}\n"
+        f"💎 <b>ELMAS:</b> {coins}\n\n"
+        f"⚡ <a href='{live_link}'>YAYINA GİT</a>"
+    )
+    asyncio.create_task(send_telegram(mesaj))
+    logging.info(f"🔥 HAZİNE YAKALANDI: @{clean_username} ({coins} Elmas)")
+
+def parse_and_process(raw_str):
+    try:
+        data = json.loads(raw_str)
+        items = data if isinstance(data, list) else [data.get("data", data)]
+        for item in items:
+            if not isinstance(item, dict) or item.get("status") == "connected":
+                continue
+            username = item.get("uniqueId") or item.get("username") or item.get("nickname") or item.get("author") or ""
+            coins = 0
+            for k in ["coins", "diamonds", "totalCoins", "val", "amount"]:
+                if item.get(k) is not None:
+                    try:
+                        coins = int(item[k])
+                        break
+                    except (ValueError, TypeError):
+                        pass
+            box_type = str(item.get("type") or "HAZİNE SANDIĞI")
+            viewers = item.get("viewers", item.get("viewerCount", 0))
+            process_item(username, coins, box_type, viewers)
+    except Exception:
+        pass
+
+async def scrape_dom_cards(page):
+    try:
+        cards = await page.query_selector_all("div")
+        for card in cards:
+            text = await card.inner_text()
+            if ("coins" in text.lower() or "goody bag" in text.lower() or "treasure box" in text.lower()) and "@" in text:
+                lines = [l.strip() for l in text.split("\n") if l.strip()]
+                username = ""
+                coins = 0
+                box_type = "HAZİNE SANDIĞI"
+                for line in lines:
+                    if "@" in line:
+                        parts = line.split()
+                        if parts:
+                            username = parts[0]
+                    if "coin" in line.lower():
+                        m = re.search(r'(\d+)\s*coin', line, re.IGNORECASE)
+                        if m:
+                            coins = int(m.group(1))
+                    if "goody bag" in line.lower():
+                        box_type = "GOODY BAG"
+                    elif "treasure box" in line.lower():
+                        box_type = "TREASURE BOX"
+                if username and coins > 0:
+                    process_item(username, coins, box_type)
+    except Exception:
+        pass
+
+async def main():
+    await send_telegram("🤖 <b>Playwright Bot Başlatıldı!</b> Canlı ve sayfa verileri izleniyor...")
+
     async with async_playwright() as p:
-        print("Playwright Bot Başlatıldı! Canlı ve sayfa verileri izleniyor...")
-        telegram_bildirim_gonder("🤖 <b>Playwright Bot Başlatıldı!</b>\nCanlı ve sayfa verileri izleniyor...")
-
-        # Bot engeline takılmamak için standart Chrome User-Agent ekliyoruz
         browser = await p.chromium.launch(
             headless=True,
-            args=['--no-sandbox', '--disable-setuid-sandbox']
+            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
         )
-        
         context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            viewport={'width': 1280, 'height': 720}
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
         )
-        
         page = await context.new_page()
 
-        try:
-            # Geçerli URL adresine gidiyoruz
-            await page.goto(SİTE_URL, wait_until="domcontentloaded", timeout=60000)
-        except Exception as e:
-            print(f"Siteye bağlanırken hata oluştu: {e}")
-            telegram_bildirim_gonder(f"⚠️ Siteye bağlanılamadı: {e}")
-            await browser.close()
-            return
+        async def on_response(res):
+            try:
+                if "json" in res.headers.get("content-type", "").lower():
+                    parse_and_process(await res.text())
+            except Exception:
+                pass
 
-        son_bildirim_durumu = False
+        page.on("response", lambda res: asyncio.create_task(on_response(res)))
+
+        def on_websocket(ws):
+            logging.info(f"🌐 WebSocket Yakalandı: {ws.url}")
+            def on_frame(frame_data):
+                payload_str = frame_data.decode('utf-8', errors='ignore') if isinstance(frame_data, bytes) else str(frame_data)
+                parse_and_process(payload_str)
+            ws.on("framereceived", on_frame)
+
+        page.on("websocket", on_websocket)
+
+        logging.info("dichvu321 sayfasına bağlanılıyor...")
+        await page.goto("https://dichvu321.com/en/tiktok-treasure-box-bot/", wait_until="domcontentloaded", timeout=60000)
+        
+        await asyncio.sleep(5)
+        await scrape_dom_cards(page)
 
         while True:
-            try:
-                # Sitedeki tüm yazıyı dinamik olarak çeker (HTML sınıf adı değişse bile metni yakalar)
-                body_text = await page.inner_text("body")
-                body_text_upper = body_text.upper()
-
-                # Sandık veya Hazine kelimesi sayfada geçiyor mu kontrol et
-                sandik_var_mi = "HAZİNE SANDIĞI" in body_text_upper or "TREASURE BOX" in body_text_upper
-
-                if sandik_var_mi and not son_bildirim_durumu:
-                    mesaj = "🎁 <b>HAZİNE SANDIĞI YAKALANDI!</b>\n\nSayfada yeni bir sandık/etkinlik tespit edildi."
-                    print("Sandık tespit edildi, Telegram'a gönderiliyor...")
-                    telegram_bildirim_gonder(mesaj)
-                    son_bildirim_durumu = True
-
-                elif not sandik_var_mi and son_bildirim_durumu:
-                    # Sandık ekrandan kaybolduysa durumu sıfırla
-                    son_bildirim_durumu = False
-
-                # Sayfadaki dynamic içeriğin güncellenmesi için 5 saniye bekle
-                await asyncio.sleep(5)
-
-            except Exception as e:
-                print(f"Döngü içerisinde hata: {e}")
-                await asyncio.sleep(5)
+            await asyncio.sleep(20)
+            await scrape_dom_cards(page)
 
 if __name__ == "__main__":
-    asyncio.run(run())
+    logging.info("Bot Başlatılıyor...")
+    Thread(target=run_dummy_server, daemon=True).start()
+    asyncio.run(main())
