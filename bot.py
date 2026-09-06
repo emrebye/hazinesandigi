@@ -1,118 +1,81 @@
 import os
 import json
-import re
 import asyncio
 import logging
 import requests
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from threading import Thread
-from collections import OrderedDict
-from playwright.async_api import async_playwright
+import websockets
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"Bot Active!")
-
-    def log_message(self, format, *args):
-        pass
-
-def run_dummy_server():
-    port = int(os.environ.get("PORT", 8080))
-    server = HTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler)
-    logging.info(f"🌐 Dummy HTTP Server {port} portunda çalışıyor.")
-    server.serve_forever()
-
+# Render Environment Variables üzerinden okunur
 TELEGRAM_BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
-MIN_COINS = int(os.getenv("MIN_COINS", "1"))
+MIN_COINS = int(os.getenv("MIN_COINS", "5"))
 
-MAX_PROCESSED_COUNT = 20000
-PROCESSED_IDS = OrderedDict()
+UPSTASH_URL = os.getenv("UPSTASH_REDIS_REST_URL")
+UPSTASH_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN")
 
-# --- ATTIĞIN KODDAN ALINAN PARSE VE DERİN ARAMA MOTORU ---
+if not TELEGRAM_BOT_TOKEN or not CHAT_ID:
+    logging.warning("⚠️ UYARI: BOT_TOKEN veya CHAT_ID ortam değişkeni ayarlanmamış!")
 
-def to_int(value):
-    try:
-        if value is None or isinstance(value, bool):
-            return None
-        number = int(value)
-        if 0 <= number <= 1000000:
-            return number
-    except Exception:
-        pass
-    return None
+BASE_URL = "https://dichvu321.com"
+PAGE_URL = f"{BASE_URL}/en/tiktok-treasure-box-bot/"
+PROXY_URL = f"{BASE_URL}/proxy.php"
 
-def recursive_find_key(obj, wanted_keys):
-    """İç içe geçen JSON içinde hedeflenen anahtarları özyinelemeli arar."""
-    if isinstance(obj, dict):
-        for key, value in obj.items():
-            key_normalized = str(key).lower().replace("_", "").replace("-", "")
-            if key_normalized in wanted_keys:
-                number = to_int(value)
-                if number is not None:
-                    return number
-            result = recursive_find_key(value, wanted_keys)
-            if result is not None:
-                return result
-    elif isinstance(obj, list):
-        for item in obj:
-            result = recursive_find_key(item, wanted_keys)
-            if result is not None:
-                return result
-    return None
+BROWSER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9,tr;q=0.8",
+    "Sec-Ch-Ua": '"Chromium";v="128", "Not;A=Brand";v="24", "Google Chrome";v="128"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1"
+}
 
-def get_chest_coins(payload, envelope_info):
-    coin_keys = ["totaldiamondcount", "diamondcount", "coincount", "totalcoins", "coins", "diamonds", "amount"]
-    for key in ["coins", "diamonds", "totalCoins", "val", "amount", "totalDiamondCount"]:
-        val = envelope_info.get(key) or payload.get(key)
-        num = to_int(val)
-        if num is not None and num > 0:
-            return num
-    val = recursive_find_key(payload, coin_keys)
-    return val if val is not None else 0
+FETCH_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+    "Accept": "application/json",
+    "Accept-Language": "en-US,en;q=0.9,tr;q=0.8",
+    "Origin": BASE_URL,
+    "Referer": PAGE_URL,
+    "Sec-Ch-Ua": '"Chromium";v="128", "Not;A=Brand";v="24", "Google Chrome";v="128"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-origin"
+}
 
-def get_chest_recipients(payload, envelope_info):
-    """Kutunun kaç kişiye dağıtılacağını tespit eder."""
-    recipient_keys = [
-        "canopen", "peoplecount", "participantcount", "winnercount",
-        "claimcount", "recipientcount", "grabcount", "membercount",
-        "people", "participants", "winners", "recipients", "slots", "count"
-    ]
-    for key in ["peopleCount", "canOpen", "winners", "recipientCount", "people"]:
-        val = envelope_info.get(key) or payload.get(key)
-        num = to_int(val)
-        if num is not None and num > 0:
-            return num
-    return recursive_find_key(payload, recipient_keys)
+LOCAL_KEYS = set()
 
-def get_chest_countdown(payload, envelope_info):
-    """Kutunun açılmasına kalan süreyi tespit eder."""
-    time_keys = ["lefttime", "countdown", "duration", "remaintime", "time", "unpacktime"]
-    for key in ["leftTime", "countdown", "duration", "remain_time", "time"]:
-        val = envelope_info.get(key) or payload.get(key)
-        num = to_int(val)
-        if num is not None and num > 0:
-            dakika = num // 60
-            saniye = num % 60
-            return f"{dakika}dk {saniye}sn" if dakika > 0 else f"{saniye}sn"
-    val = recursive_find_key(payload, time_keys)
-    if val is not None and val > 0:
-        dakika = val // 60
-        saniye = val % 60
-        return f"{dakika}dk {saniye}sn" if dakika > 0 else f"{saniye}sn"
-    return None
+def is_seen(key):
+    """Sandık daha önce görüldü mü kontrol eder (Upstash Redis + Lokal Yedek)."""
+    if key in LOCAL_KEYS:
+        return True
 
-# --- MESAJLAŞMA VE TETİKLEME ---
+    if UPSTASH_URL and UPSTASH_TOKEN:
+        try:
+            # SET key 1 NX EX 86400 (Sadece yoksa yazar ve 24 saat saklar)
+            req_url = f"{UPSTASH_URL}/set/{key}/1/nx/ex/86400"
+            headers = {"Authorization": f"Bearer {UPSTASH_TOKEN}"}
+            res = requests.get(req_url, headers=headers, timeout=3).json()
+            if res.get("result") is None:
+                return True
+        except Exception as e:
+            logging.error(f"Redis Hatası: {e}")
 
-async def send_telegram(mesaj):
+    LOCAL_KEYS.add(key)
+    if len(LOCAL_KEYS) > 10000:
+        LOCAL_KEYS.clear()
+    return False
+
+def send_telegram(mesaj):
     if not TELEGRAM_BOT_TOKEN or not CHAT_ID:
-        logging.error("Telegram BOT_TOKEN veya CHAT_ID eksik!")
         return
-
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": CHAT_ID,
@@ -121,212 +84,125 @@ async def send_telegram(mesaj):
         "disable_web_page_preview": True
     }
     try:
-        await asyncio.to_thread(requests.post, url, json=payload, timeout=4)
-        logging.info("✅ Telegram mesajı iletildi.")
+        requests.post(url, json=payload, timeout=5)
     except Exception as e:
-        logging.error(f"Telegram Gönderim Hatası: {e}")
+        logging.error(f"Telegram Hatası: {e}")
 
-def process_item(username, coins, box_type="HAZİNE SANDIĞI", viewers=0, recipients=None, countdown=None):
-    clean_username = str(username).replace("@", "").strip().lower()
-    if not clean_username or coins < MIN_COINS:
-        return
-
-    dedup_key = f"{clean_username}_{coins}"
-    if dedup_key in PROCESSED_IDS:
-        return
-    PROCESSED_IDS[dedup_key] = True
-
-    if len(PROCESSED_IDS) > MAX_PROCESSED_COUNT:
-        PROCESSED_IDS.popitem(last=False)
-
-    live_link = f"https://www.tiktok.com/@{clean_username}/live"
-    recipients_text = f"{recipients} Kişiye" if recipients is not None else "Bilinmiyor"
-    time_text = f"\n⏳ <b>SÜRE:</b> {countdown}" if countdown else ""
-
-    mesaj = (
-        f"🎁 <b>{box_type.upper()}</b>\n\n"
-        f"👤 <b>YAYINCI:</b> @{clean_username}\n"
-        f"👁️ <b>İZLEYİCİ:</b> {viewers}\n"
-        f"💎 <b>ELMAS:</b> {coins}\n"
-        f"👥 <b>DAĞITILAN:</b> {recipients_text}"
-        f"{time_text}\n\n"
-        f"⚡ <a href='{live_link}'>YAYINA GİT</a>"
-    )
-    
+def get_ticket(session):
+    session.get(PAGE_URL, headers=BROWSER_HEADERS, timeout=10)
+    params = {
+        "transport": "ws",
+        "mode": "bootstrap",
+        "stream": "all",
+        "live": "30000"
+    }
+    res = session.post(PROXY_URL, params=params, headers=FETCH_HEADERS, timeout=10)
     try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(send_telegram(mesaj))
-    except RuntimeError:
-        asyncio.run(send_telegram(mesaj))
+        data = res.json()
+        if data.get("success") and "path" in data:
+            return data["path"], session.cookies.get_dict()
+    except Exception as e:
+        logging.error(f"Bilet Ayrıştırma Hatası: {e}")
+    return None, None
 
-    logging.info(f"🔥 HAZİNE YAKALANDI: @{clean_username} ({coins} Elmas | {recipients_text} | {viewers} İzleyici)")
-
-def parse_and_process(raw_str):
+async def connect_ws(ws_url, ws_headers):
     try:
-        event_data = json.loads(raw_str)
-        items = event_data if isinstance(event_data, list) else [event_data.get("data", event_data)]
-        
-        for payload in items:
-            if not isinstance(payload, dict) or payload.get("status") == "connected":
+        return await websockets.connect(ws_url, additional_headers=ws_headers, ping_interval=20, ping_timeout=20)
+    except TypeError:
+        try:
+            return await websockets.connect(ws_url, extra_headers=ws_headers, ping_interval=20, ping_timeout=20)
+        except TypeError:
+            return await websockets.connect(ws_url, ping_interval=20, ping_timeout=20)
+
+async def run_bot():
+    send_telegram("🚀 <b>TikTok Sandık Botu Devrede!</b>\nUpstash Redis & 30.000+ Canlı Yayın Aktif...")
+    session = requests.Session()
+
+    while True:
+        try:
+            logging.info("🎫 Bilet talep ediliyor...")
+            path, cookies = await asyncio.to_thread(get_ticket, session)
+
+            if not path:
+                logging.warning("⚠️ Bilet alınamadı, 4 saniye sonra tekrar deneniyor...")
+                await asyncio.sleep(4)
                 continue
 
-            envelope_info = payload.get("envelopeInfo") or {}
-            if not isinstance(envelope_info, dict):
-                envelope_info = {}
+            ws_url = f"wss://dichvu321.com{path}"
+            logging.info("🎯 Bilet alındı, WebSocket bağlanıyor...")
 
-            # Goody Bag eleme filtresi (Attığın koddaki gibi)
-            box_type_raw = str(payload.get("type") or "").lower()
-            source_raw = str(payload.get("source") or "").lower()
-            business_type = envelope_info.get("businessType", 1)
-            if business_type == 2 or "goody" in box_type_raw or "goody" in source_raw:
-                continue
+            cookie_header = "; ".join([f"{k}={v}" for k, v in cookies.items()])
+            ws_headers = {
+                "User-Agent": BROWSER_HEADERS["User-Agent"],
+                "Origin": BASE_URL,
+                "Cookie": cookie_header
+            }
 
-            username = (
-                payload.get("uniqueId")
-                or payload.get("nickname")
-                or payload.get("username")
-                or payload.get("author")
-                or ""
-            )
+            ws = await connect_ws(ws_url, ws_headers)
+            async with ws:
+                logging.info("✅ Canlı WebSocket bağlı! Sandıklar yakalanıyor...")
+                while True:
+                    msg = await ws.recv()
+                    try:
+                        raw = json.loads(msg)
+                        msg_type = raw.get("type")
 
-            # Elmas hesaplama
-            coins = get_chest_coins(payload, envelope_info)
+                        if msg_type == "ready":
+                            covered = raw.get("data", {}).get("coveredLive", 0)
+                            logging.info(f"💓 Aktif Dinlenen Canlı Yayın: {covered}")
+                            continue
 
-            # Dağıtılacak kişi sayısı
-            recipients = get_chest_recipients(payload, envelope_info)
+                        if msg_type == "demoEvents" and isinstance(raw.get("events"), list):
+                            for item in raw["events"]:
+                                username = item.get("uniqueId")
+                                if not username:
+                                    continue
 
-            # Kalan süre
-            countdown = get_chest_countdown(payload, envelope_info)
+                                coins = int(item.get("coins") or 0)
+                                if coins < MIN_COINS:
+                                    continue
 
-            # İzleyici sayısı
-            viewers = (
-                payload.get("viewerCount")
-                or payload.get("userCount")
-                or payload.get("viewers")
-                or envelope_info.get("viewerCount")
-                or 0
-            )
+                                timestamp = item.get("timestamp", 0)
+                                key = f"box:{username}:{coins}:{timestamp}"
 
-            level = payload.get("level", 0)
-            box_title = f"HAZİNE SANDIĞI (Level {level})" if level else "HAZİNE SANDIĞI"
+                                # Upstash Redis üzerinden mükerrer kontrolü
+                                if is_seen(key):
+                                    continue
 
-            process_item(username, coins, box_title, viewers, recipients, countdown)
-    except Exception:
-        pass
+                                can_open = item.get("canOpen", 0)
+                                viewers = item.get("viewerCount", 0)
+                                level = item.get("level", 0)
+                                b_type = item.get("businessType", 0)
+                                event_type = item.get("type", "box")
 
-async def scrape_dom_cards(page):
-    try:
-        cards = await page.query_selector_all("div")
-        for card in cards:
-            text = await card.inner_text()
-            if ("coins" in text.lower() or "treasure box" in text.lower()) and "@" in text:
-                lines = [l.strip() for l in text.split("\n") if l.strip()]
-                username = ""
-                coins = 0
-                recipients = None
-                countdown = None
-                
-                for line in lines:
-                    if "@" in line:
-                        parts = line.split()
-                        if parts:
-                            username = parts[0]
-                    if "coin" in line.lower():
-                        m = re.search(r'(\d+)\s*coin', line, re.IGNORECASE)
-                        if m:
-                            coins = int(m.group(1))
-                    
-                    time_match = re.search(r'(\d{1,2}:\d{2})', line)
-                    if time_match:
-                        countdown = time_match.group(1)
+                                if event_type == "goody_bag":
+                                    box_name = f"🎁 GOODY BAG (Lvl {level})"
+                                elif b_type == 4:
+                                    box_name = "👑 ALTIN SANDIK"
+                                else:
+                                    box_name = "📦 HAZİNE SANDIĞI"
 
-                    people_match = re.search(r'(\d+)\s*(people|user|winner|kişi)', line, re.IGNORECASE)
-                    if people_match:
-                        recipients = int(people_match.group(1))
+                                live_link = f"https://www.tiktok.com/@{username}/live"
+                                viewers_str = f"👁️ <b>İzleyici:</b> {viewers}\n" if viewers else ""
+                                people_str = f"👥 <b>Kişi Sayısı:</b> {can_open}\n" if can_open else ""
 
-                if username and coins > 0:
-                    process_item(username, coins, "HAZİNE SANDIĞI", 0, recipients, countdown)
-    except Exception:
-        pass
+                                mesaj = (
+                                    f"✨ <b>{box_name}</b>\n\n"
+                                    f"👤 <b>Yayıncı:</b> @{username}\n"
+                                    f"💎 <b>Coin:</b> {coins}\n"
+                                    f"{people_str}"
+                                    f"{viewers_str}\n"
+                                    f"⚡ <a href='{live_link}'>YAYINA GİT</a>"
+                                )
+                                send_telegram(mesaj)
+                                logging.info(f"🔥 TELEGRAMA İLETİLDİ: @{username} ({coins} Coin)")
 
-async def select_feed_coverage(page):
-    try:
-        logging.info("🎯 Feed Coverage seçimi kontrol ediliyor...")
-        select_elem = await page.query_selector("select")
-        if select_elem:
-            try:
-                await page.select_option("select", label="30,000 LIVE")
-                logging.info("✅ <select> üzerinden 30,000 LIVE seçildi.")
-                return
-            except Exception:
-                pass
+                    except Exception as err:
+                        logging.error(f"Ayrıştırma hatası: {err}")
 
-        feed_trigger = await page.query_selector("text=FEED COVERAGE")
-        if feed_trigger:
-            await feed_trigger.click()
-            await asyncio.sleep(0.8)
-
-        target_option = await page.query_selector("text=30,000 LIVE")
-        if target_option:
-            await target_option.click()
-            logging.info("✅ Dropdown üzerinden '30,000 LIVE' seçildi.")
-    except Exception as e:
-        logging.warning(f"Feed coverage seçiminde hata: {e}")
-
-async def main():
-    await send_telegram("🤖 <b>Playwright Bot Başlatıldı!</b> Canlı ve sayfa verileri izleniyor...")
-
-    try:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=True,
-                args=[
-                    "--no-sandbox",
-                    "--disable-setuid-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-gpu"
-                ]
-            )
-            context = await browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
-            )
-            page = await context.new_page()
-
-            async def on_response(res):
-                try:
-                    if "json" in res.headers.get("content-type", "").lower():
-                        parse_and_process(await res.text())
-                except Exception:
-                    pass
-
-            page.on("response", lambda res: asyncio.create_task(on_response(res)))
-
-            def on_websocket(ws):
-                logging.info(f"🌐 WebSocket Yakalandı: {ws.url}")
-                def on_frame(frame_data):
-                    payload_str = frame_data.decode('utf-8', errors='ignore') if isinstance(frame_data, bytes) else str(frame_data)
-                    parse_and_process(payload_str)
-                ws.on("framereceived", on_frame)
-
-            page.on("websocket", on_websocket)
-
-            logging.info("dichvu321 sayfasına bağlanılıyor...")
-            await page.goto("https://dichvu321.com/en/tiktok-treasure-box-bot/", wait_until="domcontentloaded", timeout=60000)
-            
-            await asyncio.sleep(6)
-            await select_feed_coverage(page)
-            await asyncio.sleep(2)
-
-            await scrape_dom_cards(page)
-
-            while True:
-                await asyncio.sleep(20)
-                await scrape_dom_cards(page)
-
-    except Exception as err:
-        logging.error(f"❌ Playwright Hatası: {err}", exc_info=True)
+        except Exception as e:
+            logging.error(f"Soket döngüsü koptu: {e}")
+            await asyncio.sleep(3)
 
 if __name__ == "__main__":
-    logging.info("Bot Başlatılıyor...")
-    Thread(target=run_dummy_server, daemon=True).start()
-    asyncio.run(main())
+    asyncio.run(run_bot())
