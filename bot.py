@@ -2,21 +2,20 @@ import os
 import json
 import asyncio
 import logging
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import threading
 import requests
 import websockets
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# Render Environment Variables üzerinden okunur
-TELEGRAM_BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
+# Render Environment Variables (Boşluk ve yeni satırları .strip() ile temizler)
+TELEGRAM_BOT_TOKEN = (os.getenv("BOT_TOKEN") or "").strip()
+CHAT_ID = (os.getenv("CHAT_ID") or "").strip()
 MIN_COINS = int(os.getenv("MIN_COINS", "5"))
 
-UPSTASH_URL = os.getenv("UPSTASH_REDIS_REST_URL")
-UPSTASH_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN")
-
-if not TELEGRAM_BOT_TOKEN or not CHAT_ID:
-    logging.warning("⚠️ UYARI: BOT_TOKEN veya CHAT_ID ortam değişkeni ayarlanmamış!")
+UPSTASH_URL = (os.getenv("UPSTASH_REDIS_REST_URL") or "").strip().rstrip("/")
+UPSTASH_TOKEN = (os.getenv("UPSTASH_REDIS_REST_TOKEN") or "").strip()
 
 BASE_URL = "https://dichvu321.com"
 PAGE_URL = f"{BASE_URL}/en/tiktok-treasure-box-bot/"
@@ -52,14 +51,27 @@ FETCH_HEADERS = {
 
 LOCAL_KEYS = set()
 
+# Render Web Service port kontrolünü susturmak için dummy HTTP sunucu
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK")
+    def log_message(self, format, *args):
+        pass
+
+def run_dummy_server():
+    port = int(os.getenv("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), HealthHandler)
+    server.serve_forever()
+
 def is_seen(key):
-    """Sandık daha önce görüldü mü kontrol eder (Upstash Redis + Lokal Yedek)."""
+    """Sandık daha önce görüldü mü kontrol eder (Upstash Redis + Lokal Bellek)."""
     if key in LOCAL_KEYS:
         return True
 
     if UPSTASH_URL and UPSTASH_TOKEN:
         try:
-            # SET key 1 NX EX 86400 (Sadece yoksa yazar ve 24 saat saklar)
             req_url = f"{UPSTASH_URL}/set/{key}/1/nx/ex/86400"
             headers = {"Authorization": f"Bearer {UPSTASH_TOKEN}"}
             res = requests.get(req_url, headers=headers, timeout=3).json()
@@ -115,7 +127,7 @@ async def connect_ws(ws_url, ws_headers):
             return await websockets.connect(ws_url, ping_interval=20, ping_timeout=20)
 
 async def run_bot():
-    send_telegram("🚀 <b>TikTok Sandık Botu Devrede!</b>\nUpstash Redis & 30.000+ Canlı Yayın Aktif...")
+    send_telegram("🚀 <b>TikTok Sandık Botu Render Üzerinde Devrede!</b>\n30.000+ Canlı yayın dinleniyor...")
     session = requests.Session()
 
     while True:
@@ -165,7 +177,6 @@ async def run_bot():
                                 timestamp = item.get("timestamp", 0)
                                 key = f"box:{username}:{coins}:{timestamp}"
 
-                                # Upstash Redis üzerinden mükerrer kontrolü
                                 if is_seen(key):
                                     continue
 
@@ -205,4 +216,6 @@ async def run_bot():
             await asyncio.sleep(3)
 
 if __name__ == "__main__":
+    # Render port taramasını karşılamak için thread başlat
+    threading.Thread(target=run_dummy_server, daemon=True).start()
     asyncio.run(run_bot())
