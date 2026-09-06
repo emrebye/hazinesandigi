@@ -6,6 +6,7 @@ import logging
 import requests
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from threading import Thread
+from collections import OrderedDict
 from playwright.async_api import async_playwright
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -29,7 +30,9 @@ TELEGRAM_BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 MIN_COINS = int(os.getenv("MIN_COINS", "1"))
 
-PROCESSED_IDS = set()
+# Havuz büyüdüğü için dedup listesi 20.000 yapıldı
+MAX_PROCESSED_COUNT = 20000
+PROCESSED_IDS = OrderedDict()
 
 async def send_telegram(mesaj):
     if not TELEGRAM_BOT_TOKEN or not CHAT_ID:
@@ -57,11 +60,10 @@ def process_item(username, coins, box_type="HAZİNE SANDIĞI", viewers=0):
     dedup_key = f"{clean_username}_{coins}"
     if dedup_key in PROCESSED_IDS:
         return
-    PROCESSED_IDS.add(dedup_key)
+    PROCESSED_IDS[dedup_key] = True
 
-    # Bellek şişmesini önlemek için liste çok büyürse sıfırla
-    if len(PROCESSED_IDS) > 500:
-        PROCESSED_IDS.clear()
+    if len(PROCESSED_IDS) > MAX_PROCESSED_COUNT:
+        PROCESSED_IDS.popitem(last=False)
 
     live_link = f"https://www.tiktok.com/@{clean_username}/live"
     mesaj = (
@@ -124,6 +126,35 @@ async def scrape_dom_cards(page):
     except Exception:
         pass
 
+async def select_feed_coverage(page):
+    """Arayüzdeki FEED COVERAGE kutusundan 30,000 LIVE seçeneğini seçer."""
+    try:
+        logging.info("🎯 Feed Coverage seçimi kontrol ediliyor...")
+        
+        # 1. Standart HTML <select> ise:
+        select_elem = await page.query_selector("select")
+        if select_elem:
+            try:
+                await page.select_option("select", label="30,000 LIVE")
+                logging.info("✅ <select> üzerinden 30,000 LIVE seçildi.")
+                return
+            except Exception:
+                pass
+
+        # 2. Özel div/button dropdown ise:
+        feed_trigger = await page.query_selector("text=FEED COVERAGE")
+        if feed_trigger:
+            await feed_trigger.click()
+            await asyncio.sleep(0.8)
+
+        # 30,000 LIVE yazan kutucuğa veya seçeneğe tıkla
+        target_option = await page.query_selector("text=30,000 LIVE")
+        if target_option:
+            await target_option.click()
+            logging.info("✅ Dropdown üzerinden '30,000 LIVE' tıklandı.")
+    except Exception as e:
+        logging.warning(f"Feed coverage seçiminde hata: {e}")
+
 async def main():
     await send_telegram("🤖 <b>Playwright Bot Başlatıldı!</b> Canlı ve sayfa verileri izleniyor...")
 
@@ -158,7 +189,12 @@ async def main():
         logging.info("dichvu321 sayfasına bağlanılıyor...")
         await page.goto("https://dichvu321.com/en/tiktok-treasure-box-bot/", wait_until="domcontentloaded", timeout=60000)
         
-        await asyncio.sleep(5)
+        await asyncio.sleep(6)
+
+        # 30.000 LIVE seçimini tetikle
+        await select_feed_coverage(page)
+        await asyncio.sleep(2)
+
         await scrape_dom_cards(page)
 
         while True:
