@@ -95,7 +95,7 @@ def sync_send_telegram(mesaj):
         logging.error(f"Telegram Hatası: {e}")
 
 async def dispatch_box(mesaj, key):
-    # Telegram ve Redis işlemlerini arka planda paralel çalıştırır, soketi dondurmaz
+    # Telegram ve Redis işlemlerini arka planda soketi dondurmadan paralel çalıştırır
     await asyncio.gather(
         asyncio.to_thread(sync_send_telegram, mesaj),
         asyncio.to_thread(sync_redis_set, key)
@@ -107,7 +107,7 @@ def get_ticket(session):
         "transport": "ws",
         "mode": "bootstrap",
         "stream": "all",
-        "live": "33000"  # Güncel üst limit: 33.000 canlı yayın taranıyor
+        "live": "33000"
     }
     res = session.post(PROXY_URL, params=params, headers=FETCH_HEADERS, timeout=10)
     try:
@@ -119,13 +119,28 @@ def get_ticket(session):
     return None, None
 
 async def connect_ws(ws_url, ws_headers):
+    # ping_interval=None: Ping timeout kopmalarını önler
     try:
-        return await websockets.connect(ws_url, additional_headers=ws_headers, ping_interval=20, ping_timeout=20)
+        return await websockets.connect(
+            ws_url,
+            additional_headers=ws_headers,
+            ping_interval=None,
+            ping_timeout=None
+        )
     except TypeError:
         try:
-            return await websockets.connect(ws_url, extra_headers=ws_headers, ping_interval=20, ping_timeout=20)
+            return await websockets.connect(
+                ws_url,
+                extra_headers=ws_headers,
+                ping_interval=None,
+                ping_timeout=None
+            )
         except TypeError:
-            return await websockets.connect(ws_url, ping_interval=20, ping_timeout=20)
+            return await websockets.connect(
+                ws_url,
+                ping_interval=None,
+                ping_timeout=None
+            )
 
 async def run_bot():
     sync_send_telegram("📦 <b>Hazine Sandığı Radarı Aktif!</b>\n33.000 canlı yayın taranıyor...")
@@ -169,7 +184,7 @@ async def run_bot():
                             for item in raw["events"]:
                                 event_type = item.get("type", "box")
 
-                                # GOODY BAG'LERİ ELER (Sadece sandıklar geçer)
+                                # GOODY BAG'LERİ ELER
                                 if event_type == "goody_bag":
                                     continue
 
@@ -184,7 +199,7 @@ async def run_bot():
                                 timestamp = item.get("timestamp", 0)
                                 key = f"box:{username}:{coins}:{timestamp}"
 
-                                # Hafıza kontrolü (0 milisaniye gecikme)
+                                # Hafıza kontrolü
                                 if key in LOCAL_KEYS:
                                     continue
 
@@ -210,7 +225,7 @@ async def run_bot():
                                     f"⚡ <a href='{live_link}'>YAYINA GİT</a>"
                                 )
 
-                                # Soketi bekletmeden anında arka plana fırlatır
+                                # Gönderimi arka plana atarak akışı kesintisiz sürdürür
                                 asyncio.create_task(dispatch_box(mesaj, key))
                                 logging.info(f"📦 SANDIK İLETİLDİ: @{username} ({coins} Coin)")
 
