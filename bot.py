@@ -79,7 +79,7 @@ def sync_redis_set(key):
         except Exception as e:
             logging.error(f"Redis Hatası: {e}")
 
-def sync_send_telegram(mesaj):
+def sync_send_telegram(mesaj, button_url=None):
     if not TELEGRAM_BOT_TOKEN or not CHAT_ID:
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -89,15 +89,21 @@ def sync_send_telegram(mesaj):
         "parse_mode": "HTML",
         "disable_web_page_preview": True
     }
+    if button_url:
+        payload["reply_markup"] = {
+            "inline_keyboard": [
+                [{"text": "⚡ YAYINA GİT", "url": button_url}]
+            ]
+        }
     try:
         requests.post(url, json=payload, timeout=3)
     except Exception as e:
         logging.error(f"Telegram Hatası: {e}")
 
-async def dispatch_box(mesaj, key):
-    # Telegram ve Redis işlemlerini arka planda soketi dondurmadan paralel çalıştırır
+async def dispatch_box(mesaj, key, live_link):
+    # Telegram ve Redis işlemlerini arka planda paralel çalıştırır
     await asyncio.gather(
-        asyncio.to_thread(sync_send_telegram, mesaj),
+        asyncio.to_thread(sync_send_telegram, mesaj, live_link),
         asyncio.to_thread(sync_redis_set, key)
     )
 
@@ -119,7 +125,6 @@ def get_ticket(session):
     return None, None
 
 async def connect_ws(ws_url, ws_headers):
-    # ping_interval=None: Ping timeout kopmalarını önler
     try:
         return await websockets.connect(
             ws_url,
@@ -216,17 +221,17 @@ async def run_bot():
                                 viewers_str = f"👁️ <b>İzleyici:</b> {viewers}\n" if viewers else ""
                                 people_str = f"👥 <b>Kişi Sayısı:</b> {can_open}\n" if can_open else ""
 
+                                # Link açık metin olarak verilir, onay kutusu çıkmaz
                                 mesaj = (
                                     f"✨ <b>{box_name}</b>\n\n"
                                     f"👤 <b>Yayıncı:</b> @{username}\n"
                                     f"💎 <b>Coin:</b> {coins}\n"
                                     f"{people_str}"
                                     f"{viewers_str}\n"
-                                    f"⚡ <a href='{live_link}'>YAYINA GİT</a>"
+                                    f"{live_link}"
                                 )
 
-                                # Gönderimi arka plana atarak akışı kesintisiz sürdürür
-                                asyncio.create_task(dispatch_box(mesaj, key))
+                                asyncio.create_task(dispatch_box(mesaj, key, live_link))
                                 logging.info(f"📦 SANDIK İLETİLDİ: @{username} ({coins} Coin)")
 
                     except Exception as err:
