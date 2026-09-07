@@ -58,102 +58,58 @@ HTML_PAGE = """<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Hazine Sandığı Radarı - Milisaniye Senkronize</title>
+    <title>Hazine Sandığı Radarı</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0b0f19; color: #f8fafc; padding: 15px; }
         .header { text-align: center; margin-bottom: 15px; }
-        .sync-badge { display: inline-block; background: #1e293b; border: 1px solid #334155; padding: 4px 10px; border-radius: 20px; font-size: 0.8rem; color: #38bdf8; margin-top: 5px; }
         .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 15px; }
-        .card { background: #161f30; border-radius: 12px; padding: 16px; border: 1px solid #1e293b; position: relative; }
+        .card { background: #161f30; border-radius: 12px; padding: 16px; border: 1px solid #1e293b; }
         .card.gold { border-color: #eab308; background: #1c1a0f; }
         .title { font-weight: bold; font-size: 1.1rem; color: #38bdf8; margin-bottom: 6px; }
         .gold .title { color: #facc15; }
         .details { font-size: 0.9rem; color: #cbd5e1; line-height: 1.5; }
         .timer-box { background: #0f172a; border-radius: 8px; padding: 10px; text-align: center; margin: 12px 0; border: 1px solid #334155; }
         .timer { font-size: 2rem; font-weight: 800; font-family: monospace; color: #22c55e; }
-        .timer.urgent { color: #ef4444; }
-        .btn { display: block; text-align: center; background: #2563eb; color: white; text-decoration: none; padding: 12px; border-radius: 8px; font-weight: bold; transition: 0.2s; }
-        .btn:hover { background: #1d4ed8; }
+        .btn { display: block; text-align: center; background: #2563eb; color: white; text-decoration: none; padding: 12px; border-radius: 8px; font-weight: bold; }
     </style>
 </head>
 <body>
     <div class="header">
         <h2>📦 Hazine Sandığı Canlı Sayaç</h2>
-        <div class="sync-badge" id="syncStatus">Zaman Eşitleniyor...</div>
     </div>
     <div class="grid" id="boxGrid"></div>
-
     <script>
-        let timeOffset = 0;
-        let isSynced = false;
-
-        async function syncTime() {
-            try {
-                const t0 = performance.now();
-                const res = await fetch("https://dichvu321.com/tiktok/t.php?api=now&nonce=" + Math.floor(Math.random()*1000000));
-                const data = await res.json();
-                const t1 = performance.now();
-                const latency = (t1 - t0) / 2;
-                
-                if (data && data.now_ms) {
-                    timeOffset = (data.now_ms + latency) - Date.now();
-                    isSynced = true;
-                    document.getElementById('syncStatus').innerText = `⚡ Bangkok Edge Senkronize (Gecikme: ${Math.round(latency)}ms)`;
-                }
-            } catch(e) {
-                document.getElementById('syncStatus').innerText = "⚠️ Yerel Saat Kullanılıyor";
-            }
-        }
-
-        function getExactNow() {
-            return (Date.now() + timeOffset) / 1000;
-        }
-
-        let cachedBoxes = [];
         async function fetchBoxes() {
             try {
                 const res = await fetch('/api/boxes');
-                cachedBoxes = await res.json();
+                const boxes = await res.json();
+                const grid = document.getElementById('boxGrid');
+                const now = Math.floor(Date.now() / 1000);
+                grid.innerHTML = '';
+                boxes.forEach(b => {
+                    const rem = Math.max(0, b.target_time - now);
+                    if (rem <= 0) return;
+                    const mins = String(Math.floor(rem / 60)).padStart(2, '0');
+                    const secs = String(rem % 60).padStart(2, '0');
+                    const card = document.createElement('div');
+                    card.className = b.is_gold ? 'card gold' : 'card';
+                    card.innerHTML = `
+                        <div class="title">${b.box_name}</div>
+                        <div class="details">
+                            <div>👤 <b>Yayıncı:</b> @${b.username}</div>
+                            <div>💎 <b>Coin:</b> ${b.coins}</div>
+                            <div>👥 <b>Kişi:</b> ${b.can_open} | 👁️ <b>İzleyici:</b> ${b.viewers}</div>
+                        </div>
+                        <div class="timer-box"><div class="timer">${mins}:${secs}</div></div>
+                        <a href="https://www.tiktok.com/@${b.username}/live" target="_blank" class="btn">YAYINA GİT</a>
+                    `;
+                    grid.appendChild(card);
+                });
             } catch(e) {}
         }
-
-        function render() {
-            const grid = document.getElementById('boxGrid');
-            const now = getExactNow();
-            grid.innerHTML = '';
-
-            cachedBoxes.forEach(b => {
-                const rem = Math.max(0, b.target_time - now);
-                if (rem <= 0) return;
-
-                const mins = String(Math.floor(rem / 60)).padStart(2, '0');
-                const secs = String(Math.floor(rem % 60)).padStart(2, '0');
-                const isUrgent = rem <= 30;
-
-                const card = document.createElement('div');
-                card.className = b.is_gold ? 'card gold' : 'card';
-                card.innerHTML = `
-                    <div class="title">${b.box_name}</div>
-                    <div class="details">
-                        <div>👤 <b>Yayıncı:</b> @${b.username}</div>
-                        <div>💎 <b>Coin:</b> ${b.coins}</div>
-                        <div>👥 <b>Kişi:</b> ${b.can_open} | 👁️ <b>İzleyici:</b> ${b.viewers}</div>
-                    </div>
-                    <div class="timer-box">
-                        <div class="timer ${isUrgent ? 'urgent' : ''}">${mins}:${secs}</div>
-                    </div>
-                    <a href="https://www.tiktok.com/@${b.username}/live" target="_blank" class="btn">YAYINA GİT</a>
-                `;
-                grid.appendChild(card);
-            });
-        }
-
-        syncTime();
-        setInterval(syncTime, 60000);
+        setInterval(fetchBoxes, 1000);
         fetchBoxes();
-        setInterval(fetchBoxes, 2000);
-        setInterval(render, 500);
     </script>
 </body>
 </html>
@@ -164,6 +120,7 @@ class LiveDashboardHandler(BaseHTTPRequestHandler):
         if self.path in ("/", "/index.html"):
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(HTML_PAGE.encode("utf-8"))
         elif self.path == "/api/boxes":
@@ -172,12 +129,23 @@ class LiveDashboardHandler(BaseHTTPRequestHandler):
             LIVE_BOXES = [b for b in LIVE_BOXES if b["target_time"] > now]
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "*")
             self.end_headers()
             self.wfile.write(json.dumps(LIVE_BOXES).encode("utf-8"))
         else:
             self.send_response(200)
+            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(b"OK")
+
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "*")
+        self.end_headers()
 
     def do_HEAD(self):
         self.send_response(200)
