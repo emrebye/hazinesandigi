@@ -1,4 +1,4 @@
-İmport os
+import os
 import json
 import asyncio
 import logging
@@ -57,6 +57,11 @@ class HealthHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"OK")
+
+    def do_HEAD(self):
+        self.send_response(200)
+        self.end_headers()
+
     def log_message(self, format, *args):
         pass
 
@@ -65,26 +70,16 @@ def run_dummy_server():
     server = HTTPServer(("0.0.0.0", port), HealthHandler)
     server.serve_forever()
 
-def is_seen(key):
-    if key in LOCAL_KEYS:
-        return True
-
+def sync_redis_set(key):
     if UPSTASH_URL and UPSTASH_TOKEN:
         try:
             req_url = f"{UPSTASH_URL}/set/{key}/1/nx/ex/86400"
             headers = {"Authorization": f"Bearer {UPSTASH_TOKEN}"}
-            res = requests.get(req_url, headers=headers, timeout=3).json()
-            if res.get("result") is None:
-                return True
+            requests.get(req_url, headers=headers, timeout=2)
         except Exception as e:
             logging.error(f"Redis Hatası: {e}")
 
-    LOCAL_KEYS.add(key)
-    if len(LOCAL_KEYS) > 10000:
-        LOCAL_KEYS.clear()
-    return False
-
-def send_telegram(mesaj):
+def sync_send_telegram(mesaj):
     if not TELEGRAM_BOT_TOKEN or not CHAT_ID:
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -95,9 +90,16 @@ def send_telegram(mesaj):
         "disable_web_page_preview": True
     }
     try:
-        requests.post(url, json=payload, timeout=5)
+        requests.post(url, json=payload, timeout=3)
     except Exception as e:
         logging.error(f"Telegram Hatası: {e}")
+
+async def dispatch_box(mesaj, key):
+    # Telegram ve Redis işlemlerini arka planda paralel çalıştırır, soketi dondurmaz
+    await asyncio.gather(
+        asyncio.to_thread(sync_send_telegram, mesaj),
+        asyncio.to_thread(sync_redis_set, key)
+    )
 
 def get_ticket(session):
     session.get(PAGE_URL, headers=BROWSER_HEADERS, timeout=10)
@@ -105,7 +107,7 @@ def get_ticket(session):
         "transport": "ws",
         "mode": "bootstrap",
         "stream": "all",
-        "live": "30000"
+        "live": "33000"  # Güncel üst limit: 33.000 canlı yayın taranıyor
     }
     res = session.post(PROXY_URL, params=params, headers=FETCH_HEADERS, timeout=10)
     try:
@@ -126,7 +128,7 @@ async def connect_ws(ws_url, ws_headers):
             return await websockets.connect(ws_url, ping_interval=20, ping_timeout=20)
 
 async def run_bot():
-    send_telegram("📦 <b>Hazine Sandığı Radarı Aktif!</b>\nSadece TikTok hazine sandıkları taranıyor...")
+    sync_send_telegram("📦 <b>Hazine Sandığı Radarı Aktif!</b>\n33.000 canlı yayın taranıyor...")
     session = requests.Session()
 
     while True:
@@ -182,18 +184,19 @@ async def run_bot():
                                 timestamp = item.get("timestamp", 0)
                                 key = f"box:{username}:{coins}:{timestamp}"
 
-                                if is_seen(key):
+                                # Hafıza kontrolü (0 milisaniye gecikme)
+                                if key in LOCAL_KEYS:
                                     continue
+
+                                LOCAL_KEYS.add(key)
+                                if len(LOCAL_KEYS) > 10000:
+                                    LOCAL_KEYS.clear()
 
                                 can_open = item.get("canOpen", 0)
                                 viewers = item.get("viewerCount", 0)
                                 b_type = item.get("businessType", 0)
 
-                                if b_type == 4:
-                                    box_name = "👑 ALTIN SANDIK"
-                                else:
-                                    box_name = "📦 HAZİNE SANDIĞI"
-
+                                box_name = "👑 ALTIN SANDIK" if b_type == 4 else "📦 HAZİNE SANDIĞI"
                                 live_link = f"https://www.tiktok.com/@{username}/live"
                                 viewers_str = f"👁️ <b>İzleyici:</b> {viewers}\n" if viewers else ""
                                 people_str = f"👥 <b>Kişi Sayısı:</b> {can_open}\n" if can_open else ""
@@ -206,7 +209,9 @@ async def run_bot():
                                     f"{viewers_str}\n"
                                     f"⚡ <a href='{live_link}'>YAYINA GİT</a>"
                                 )
-                                send_telegram(mesaj)
+
+                                # Soketi bekletmeden anında arka plana fırlatır
+                                asyncio.create_task(dispatch_box(mesaj, key))
                                 logging.info(f"📦 SANDIK İLETİLDİ: @{username} ({coins} Coin)")
 
                     except Exception as err:
