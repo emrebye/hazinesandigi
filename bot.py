@@ -10,6 +10,7 @@ import websockets
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
+# Render Ortam Değişkenleri
 TELEGRAM_BOT_TOKEN = (os.getenv("BOT_TOKEN") or "").strip()
 CHAT_ID = (os.getenv("CHAT_ID") or "").strip()
 MIN_COINS = int((os.getenv("MIN_COINS") or "5").strip())
@@ -50,27 +51,149 @@ FETCH_HEADERS = {
 }
 
 LOCAL_KEYS = set()
+LIVE_BOXES = []
 
-class HealthHandler(BaseHTTPRequestHandler):
+HTML_PAGE = """<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hazine Sandığı Radarı - Milisaniye Senkronize</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0b0f19; color: #f8fafc; padding: 15px; }
+        .header { text-align: center; margin-bottom: 15px; }
+        .sync-badge { display: inline-block; background: #1e293b; border: 1px solid #334155; padding: 4px 10px; border-radius: 20px; font-size: 0.8rem; color: #38bdf8; margin-top: 5px; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 15px; }
+        .card { background: #161f30; border-radius: 12px; padding: 16px; border: 1px solid #1e293b; position: relative; }
+        .card.gold { border-color: #eab308; background: #1c1a0f; }
+        .title { font-weight: bold; font-size: 1.1rem; color: #38bdf8; margin-bottom: 6px; }
+        .gold .title { color: #facc15; }
+        .details { font-size: 0.9rem; color: #cbd5e1; line-height: 1.5; }
+        .timer-box { background: #0f172a; border-radius: 8px; padding: 10px; text-align: center; margin: 12px 0; border: 1px solid #334155; }
+        .timer { font-size: 2rem; font-weight: 800; font-family: monospace; color: #22c55e; }
+        .timer.urgent { color: #ef4444; }
+        .btn { display: block; text-align: center; background: #2563eb; color: white; text-decoration: none; padding: 12px; border-radius: 8px; font-weight: bold; transition: 0.2s; }
+        .btn:hover { background: #1d4ed8; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h2>📦 Hazine Sandığı Canlı Sayaç</h2>
+        <div class="sync-badge" id="syncStatus">Zaman Eşitleniyor...</div>
+    </div>
+    <div class="grid" id="boxGrid"></div>
+
+    <script>
+        let timeOffset = 0;
+        let isSynced = false;
+
+        async function syncTime() {
+            try {
+                const t0 = performance.now();
+                const res = await fetch("https://dichvu321.com/tiktok/t.php?api=now&nonce=" + Math.floor(Math.random()*1000000));
+                const data = await res.json();
+                const t1 = performance.now();
+                const latency = (t1 - t0) / 2;
+                
+                if (data && data.now_ms) {
+                    timeOffset = (data.now_ms + latency) - Date.now();
+                    isSynced = true;
+                    document.getElementById('syncStatus').innerText = `⚡ Bangkok Edge Senkronize (Gecikme: ${Math.round(latency)}ms)`;
+                }
+            } catch(e) {
+                document.getElementById('syncStatus').innerText = "⚠️ Yerel Saat Kullanılıyor";
+            }
+        }
+
+        function getExactNow() {
+            return (Date.now() + timeOffset) / 1000;
+        }
+
+        let cachedBoxes = [];
+        async function fetchBoxes() {
+            try {
+                const res = await fetch('/api/boxes');
+                cachedBoxes = await res.json();
+            } catch(e) {}
+        }
+
+        function render() {
+            const grid = document.getElementById('boxGrid');
+            const now = getExactNow();
+            grid.innerHTML = '';
+
+            cachedBoxes.forEach(b => {
+                const rem = Math.max(0, b.target_time - now);
+                if (rem <= 0) return;
+
+                const mins = String(Math.floor(rem / 60)).padStart(2, '0');
+                const secs = String(Math.floor(rem % 60)).padStart(2, '0');
+                const isUrgent = rem <= 30;
+
+                const card = document.createElement('div');
+                card.className = b.is_gold ? 'card gold' : 'card';
+                card.innerHTML = `
+                    <div class="title">${b.box_name}</div>
+                    <div class="details">
+                        <div>👤 <b>Yayıncı:</b> @${b.username}</div>
+                        <div>💎 <b>Coin:</b> ${b.coins}</div>
+                        <div>👥 <b>Kişi:</b> ${b.can_open} | 👁️ <b>İzleyici:</b> ${b.viewers}</div>
+                    </div>
+                    <div class="timer-box">
+                        <div class="timer ${isUrgent ? 'urgent' : ''}">${mins}:${secs}</div>
+                    </div>
+                    <a href="https://www.tiktok.com/@${b.username}/live" target="_blank" class="btn">YAYINA GİT</a>
+                `;
+                grid.appendChild(card);
+            });
+        }
+
+        syncTime();
+        setInterval(syncTime, 60000);
+        fetchBoxes();
+        setInterval(fetchBoxes, 2000);
+        setInterval(render, 500);
+    </script>
+</body>
+</html>
+"""
+
+class LiveDashboardHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"OK")
+        if self.path in ("/", "/index.html"):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(HTML_PAGE.encode("utf-8"))
+        elif self.path == "/api/boxes":
+            now = int(time.time())
+            global LIVE_BOXES
+            LIVE_BOXES = [b for b in LIVE_BOXES if b["target_time"] > now]
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(LIVE_BOXES).encode("utf-8"))
+        else:
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"OK")
+
     def do_HEAD(self):
         self.send_response(200)
         self.end_headers()
+
     def log_message(self, format, *args):
         pass
 
-def run_dummy_server():
+def run_dashboard_server():
     port = int(os.getenv("PORT", 8080))
-    server = HTTPServer(("0.0.0.0", port), HealthHandler)
+    server = HTTPServer(("0.0.0.0", port), LiveDashboardHandler)
     server.serve_forever()
 
 def is_seen(key):
     if key in LOCAL_KEYS:
         return True
-
     if UPSTASH_URL and UPSTASH_TOKEN:
         try:
             req_url = f"{UPSTASH_URL}/set/{key}/1/nx/ex/86400"
@@ -103,12 +226,7 @@ def send_telegram(mesaj):
 
 def get_ticket(session):
     session.get(PAGE_URL, headers=BROWSER_HEADERS, timeout=10)
-    params = {
-        "transport": "ws",
-        "mode": "bootstrap",
-        "stream": "all",
-        "live": "33000"
-    }
+    params = {"transport": "ws", "mode": "bootstrap", "stream": "all", "live": "33000"}
     res = session.post(PROXY_URL, params=params, headers=FETCH_HEADERS, timeout=10)
     try:
         data = res.json()
@@ -137,13 +255,10 @@ async def run_bot():
             path, cookies = await asyncio.to_thread(get_ticket, session)
 
             if not path:
-                logging.warning("⚠️ Bilet alınamadı, 4 saniye sonra tekrar deneniyor...")
                 await asyncio.sleep(4)
                 continue
 
             ws_url = f"wss://dichvu321.com{path}"
-            logging.info("🎯 Bilet alındı, WebSocket bağlanıyor...")
-
             cookie_header = "; ".join([f"{k}={v}" for k, v in cookies.items()])
             ws_headers = {
                 "User-Agent": BROWSER_HEADERS["User-Agent"],
@@ -153,7 +268,7 @@ async def run_bot():
 
             ws = await connect_ws(ws_url, ws_headers)
             async with ws:
-                logging.info("✅ Canlı WebSocket bağlı! Sadece Hazine Sandıkları dinleniyor...")
+                logging.info("✅ Canlı WebSocket bağlı! Sandıklar dinleniyor...")
                 while True:
                     msg = await ws.recv()
                     try:
@@ -167,9 +282,7 @@ async def run_bot():
 
                         if msg_type == "demoEvents" and isinstance(raw.get("events"), list):
                             for item in raw["events"]:
-                                event_type = item.get("type", "box")
-
-                                if event_type == "goody_bag":
+                                if item.get("type", "box") == "goody_bag":
                                     continue
 
                                 username = item.get("uniqueId")
@@ -186,21 +299,27 @@ async def run_bot():
                                 if is_seen(key):
                                     continue
 
-                                # Kalan Süre Hesaplama
-                                sure_str = ""
-                                if raw_ts:
-                                    target = raw_ts / 1000 if raw_ts > 10_000_000_000 else float(raw_ts)
-                                    rem = int(target - time.time())
-                                    if rem > 0:
-                                        sure_str = f"⏳ <b>Kalan Süre:</b> {rem // 60:02d}:{rem % 60:02d}\n"
-                                    else:
-                                        sure_str = "⏳ <b>Kalan Süre:</b> Açılmak Üzere\n"
+                                logging.info(f"HAM PAKET: {item}")
 
                                 can_open = item.get("canOpen", 0)
                                 viewers = item.get("viewerCount", 0)
                                 b_type = item.get("businessType", 0)
+                                is_gold = (b_type == 4)
+                                box_name = "👑 ALTIN SANDIK" if is_gold else "📦 HAZİNE SANDIĞI"
 
-                                box_name = "👑 ALTIN SANDIK" if b_type == 4 else "📦 HAZİNE SANDIĞI"
+                                duration = int(item.get("duration") or item.get("leftTime") or 180)
+                                target_time = int(time.time()) + duration
+
+                                LIVE_BOXES.append({
+                                    "username": username,
+                                    "coins": coins,
+                                    "can_open": can_open,
+                                    "viewers": viewers,
+                                    "box_name": box_name,
+                                    "is_gold": is_gold,
+                                    "target_time": target_time
+                                })
+
                                 live_link = f"https://www.tiktok.com/@{username}/live"
                                 viewers_str = f"👁️ <b>İzleyici:</b> {viewers}\n" if viewers else ""
                                 people_str = f"👥 <b>Kişi Sayısı:</b> {can_open}\n" if can_open else ""
@@ -210,12 +329,11 @@ async def run_bot():
                                     f"👤 <b>Yayıncı:</b> @{username}\n"
                                     f"💎 <b>Coin:</b> {coins}\n"
                                     f"{people_str}"
-                                    f"{viewers_str}"
-                                    f"{sure_str}\n"
+                                    f"{viewers_str}\n"
                                     f"{live_link}"
                                 )
                                 send_telegram(mesaj)
-                                logging.info(f"📦 SANDIK İLETİLDİ: @{username} ({coins} Coin)")
+                                logging.info(f"📦 İLETİLDİ: @{username} ({coins} Coin)")
 
                     except Exception as err:
                         logging.error(f"Ayrıştırma hatası: {err}")
@@ -225,5 +343,5 @@ async def run_bot():
             await asyncio.sleep(3)
 
 if __name__ == "__main__":
-    threading.Thread(target=run_dummy_server, daemon=True).start()
+    threading.Thread(target=run_dashboard_server, daemon=True).start()
     asyncio.run(run_bot())
