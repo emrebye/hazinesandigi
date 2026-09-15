@@ -1,9 +1,8 @@
 # ============================================================
 # main.py
-# ÖDÜL AVCISI — SADECE GOODY BAG
+# ÖDÜL AVCISI
 #
-# Sadece Goody Bag dinler ve gösterir.
-# Hazine Sandığı (CHEST) tamamen yok sayılır.
+# GOODY BAG + HAZİNE SANDIĞI
 #
 # CANLI LİNK DÜZELTİLDİ:
 # - Token içindeki eski/stale URL kullanılmaz
@@ -88,7 +87,7 @@ BASE_URL = os.environ.get(
 
 BOT_USERNAME = os.environ.get(
     "BOT_USERNAME",
-    "Yapayhazinebot"
+    "YeniBirAirdropBot"
 )
 
 ADMIN_USER_ID = int(
@@ -112,7 +111,12 @@ VIP_DAYS = int(
     )
 )
 
-TARGET_CHAT_ID = int(os.environ.get("TARGET_CHAT_ID", "-1003999489709"))
+TARGET_CHAT_ID = int(
+    os.environ.get(
+        "TARGET_CHAT_ID",
+        "-1004421946217"
+    )
+)
 
 TURKEY_TZ = ZoneInfo("Europe/Istanbul")
 
@@ -124,6 +128,7 @@ VIP_REPORT_MINUTE = 0
 # KAYNAKLAR
 # ============================================================
 
+# Bu bot yalnızca GOODY BAG botu — sadece 2 kaynağı dinler.
 SOURCE_CHATS = [
     -1002583301445,
     -1002223772922,
@@ -193,14 +198,14 @@ DB_FILE = os.environ.get("DB_FILE", "radar.db")
 # ve her restart/deploy sonrasında otomatik geri yüklenir.
 UPSTASH_REDIS_REST_URL = os.environ.get("UPSTASH_REDIS_REST_URL", "").rstrip("/")
 UPSTASH_REDIS_REST_TOKEN = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "")
-VIP_REMOTE_KEY = os.environ.get("VIP_REMOTE_KEY", "odul_avcisi:vip_users:v1")
+VIP_REMOTE_KEY = os.environ.get("VIP_REMOTE_KEY", "odul_avcisi_goody:vip_users:v1")
 
 # RADAR (Goody Bag / Hazine Sandığı) KALICI DEPOLAMA
 # Mini App verileri LIVE_GOODY_BAGS / LIVE_CHESTS RAM'inden okunuyor.
 # RAM her restart/deploy'da sıfırlanır -> Mini App "0" gösterirdi.
 # Aynı Upstash bağlantısı üzerinden bu RAM state'i de periyodik
 # olarak yedeklenir ve açılışta geri yüklenir.
-RADAR_REMOTE_KEY = os.environ.get("RADAR_REMOTE_KEY", "odul_avcisi:radar_goody_only:v1")
+RADAR_REMOTE_KEY = os.environ.get("RADAR_REMOTE_KEY", "odul_avcisi_goody:radar_live:v1")
 RADAR_REMOTE_SYNC_SECONDS = 30
 RADAR_REMOTE_MAX_ITEMS = 300
 
@@ -5508,6 +5513,7 @@ def vip_permissions_text(vip):
 
         "🌐 VIP RADAR\n"
         "• Canlı Goody Bag radarı\n"
+        "• Canlı Hazine Sandığı radarı\n"
         "• Arama ve filtreler\n\n"
 
         "🎯 KİŞİSEL ALARM\n"
@@ -5520,7 +5526,8 @@ def vip_permissions_text(vip):
         "özel mesaj alırsın.\n\n"
 
         "🔕 SESSİZE ALMA\n"
-        "• Goody Bag\n\n"
+        "• Goody Bag\n"
+        "• Hazine Sandığı\n\n"
 
         "📌 KOMUTLAR\n"
         "/alarm\n"
@@ -6710,7 +6717,7 @@ async def yardim_cmd(
     user = update.effective_user
 
     text = (
-        "🟪 GOODY BAG RADARI\n\n"
+        "🏆 ÖDÜL AVCISI\n\n"
 
         "🎯 KİŞİSEL ALARM\n"
         "/alarm 200 5\n"
@@ -6796,7 +6803,8 @@ async def message_listener(event):
         if not data:
             return
 
-        # SADECE GOODY BAG — Hazine Sandığını yok say
+        # Bu bot yalnızca GOODY BAG botu — CHEST olaylarını
+        # tamamen yok say (ne radara ekle ne Telegram'a gönder).
         if data.get("type") != "GOODY BAG":
             return
 
@@ -6852,7 +6860,7 @@ async def main():
     print("=" * 70)
 
     print(
-        "🟪 GOODY BAG RADARI BAŞLIYOR"
+        "🏆 ÖDÜL AVCISI BAŞLIYOR"
     )
 
     print("=" * 70)
@@ -7063,7 +7071,7 @@ async def main():
     )
 
     print(
-        "[HAZIR] Hazine Sandığı KAPALI (sadece Goody Bag)."
+        "[HAZIR] Hazine Sandığı aktif."
     )
 
     print(
