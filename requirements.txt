@@ -1,2 +1,4 @@
+telethon
 requests
-websockets
+aiohttp
+python-telegram-bo
