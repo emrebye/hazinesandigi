@@ -1,4 +1,4 @@
 telethon
 requests
 aiohttp
-python-telegram-bo
+python-telegram-bot
