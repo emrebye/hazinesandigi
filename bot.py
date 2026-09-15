@@ -114,7 +114,7 @@ VIP_DAYS = int(
 TARGET_CHAT_ID = int(
     os.environ.get(
         "TARGET_CHAT_ID",
-        "-1004421946217"
+        "-1004415070059"
     )
 )
 
