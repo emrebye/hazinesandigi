@@ -2,7 +2,7 @@
 # main.py
 # ÖDÜL AVCISI
 #
-# GOODY BAG + HAZİNE SANDIĞI
+# GOODY BAG
 #
 # CANLI LİNK DÜZELTİLDİ:
 # - Token içindeki eski/stale URL kullanılmaz
@@ -27,7 +27,6 @@
 # - 429 koruması
 # - Mini App
 # - Mini App initData doğrulama
-# - Arama / filtre
 # - Kullanıcı adı kopyalama
 # ============================================================
 
@@ -161,9 +160,8 @@ DUPLICATE_COOLDOWN = 60
 # ============================================================
 
 LIVE_GOODY_BAGS = {}
-LIVE_CHESTS = {}
 
-# Bu iki sozluk hicbir zaman temizlenmiyordu; saatler ilerledikce
+# Bu sozluk hicbir zaman temizlenmiyordu; saatler ilerledikce
 # icinde binlerce kayit birikip her 2 saniyede bir TAMAMI her acik
 # Mini App'e tekrar tekrar gonderiliyordu. Render'daki "5GB bandwidth"
 # limitinin asil sebebi buydu. Artik en fazla MAX_LIVE_ITEMS kadar
@@ -200,8 +198,8 @@ UPSTASH_REDIS_REST_URL = os.environ.get("UPSTASH_REDIS_REST_URL", "").rstrip("/"
 UPSTASH_REDIS_REST_TOKEN = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "")
 VIP_REMOTE_KEY = os.environ.get("VIP_REMOTE_KEY", "odul_avcisi_goody:vip_users:v1")
 
-# RADAR (Goody Bag / Hazine Sandığı) KALICI DEPOLAMA
-# Mini App verileri LIVE_GOODY_BAGS / LIVE_CHESTS RAM'inden okunuyor.
+# RADAR (Goody Bag) KALICI DEPOLAMA
+# Mini App verileri LIVE_GOODY_BAGS RAM'inden okunuyor.
 # RAM her restart/deploy'da sıfırlanır -> Mini App "0" gösterirdi.
 # Aynı Upstash bağlantısı üzerinden bu RAM state'i de periyodik
 # olarak yedeklenir ve açılışta geri yüklenir.
@@ -376,22 +374,11 @@ def _save_remote_radar():
             reverse=True
         )[:RADAR_REMOTE_MAX_ITEMS]
 
-        chest_items = sorted(
-            LIVE_CHESTS.values(),
-            key=lambda d: safe_int(d.get("detected_at")),
-            reverse=True
-        )[:RADAR_REMOTE_MAX_ITEMS]
-
         payload = json.dumps(
             {
                 "goody_bags": {
                     item["room"]: item
                     for item in goody_items
-                    if item.get("room")
-                },
-                "chests": {
-                    item["room"]: item
-                    for item in chest_items
                     if item.get("room")
                 },
             },
@@ -416,17 +403,13 @@ def _restore_radar_from_remote():
         return
 
     goody = remote.get("goody_bags") or {}
-    chests = remote.get("chests") or {}
 
     if isinstance(goody, dict):
         LIVE_GOODY_BAGS.update(goody)
 
-    if isinstance(chests, dict):
-        LIVE_CHESTS.update(chests)
-
     print(
         f"[RADAR KALICI DEPOLAMA] "
-        f"{len(goody)} goody bag, {len(chests)} hazine sandığı geri yüklendi."
+        f"{len(goody)} goody bag geri yüklendi."
     )
 
 
@@ -512,8 +495,7 @@ def init_db():
             user_id INTEGER PRIMARY KEY,
             alarm_coins INTEGER DEFAULT 0,
             alarm_people INTEGER DEFAULT 0,
-            mute_goody INTEGER DEFAULT 0,
-            mute_chest INTEGER DEFAULT 0
+            mute_goody INTEGER DEFAULT 0
         )
     """)
 
@@ -533,7 +515,7 @@ def init_db():
     _restore_vips_from_remote()
 
     # Render restart/deploy sonrası Mini App radar verisini
-    # (Goody Bag / Hazine Sandığı) kalıcı depodan geri getir.
+    # (Goody Bag) kalıcı depodan geri getir.
     _restore_radar_from_remote()
 
 
@@ -1108,8 +1090,7 @@ def get_user_settings(user_id):
         SELECT
             alarm_coins,
             alarm_people,
-            mute_goody,
-            mute_chest
+            mute_goody
         FROM user_settings
         WHERE user_id=?
     """, (user_id,))
@@ -1129,9 +1110,6 @@ def get_user_settings(user_id):
 
             "mute_goody":
                 bool(row[2]),
-
-            "mute_chest":
-                bool(row[3]),
         }
 
     else:
@@ -1140,7 +1118,6 @@ def get_user_settings(user_id):
             "alarm_coins": 0,
             "alarm_people": 0,
             "mute_goody": False,
-            "mute_chest": False,
         }
 
     USER_SETTINGS_CACHE[user_id] = result
@@ -1167,23 +1144,20 @@ def save_user_settings(
             user_id,
             alarm_coins,
             alarm_people,
-            mute_goody,
-            mute_chest
+            mute_goody
         )
-        VALUES (?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?)
 
         ON CONFLICT(user_id)
         DO UPDATE SET
             alarm_coins=excluded.alarm_coins,
             alarm_people=excluded.alarm_people,
-            mute_goody=excluded.mute_goody,
-            mute_chest=excluded.mute_chest
+            mute_goody=excluded.mute_goody
     """, (
         user_id,
         current["alarm_coins"],
         current["alarm_people"],
         int(current["mute_goody"]),
-        int(current["mute_chest"]),
     ))
 
     conn.commit()
@@ -1735,7 +1709,7 @@ def extract_rate(
 
 
 # ============================================================
-# TYPE
+# TYPE (Sadece Goody Bag)
 # ============================================================
 
 def detect_type(
@@ -1759,15 +1733,6 @@ def detect_type(
     ):
         return True
 
-    if re.search(
-        r'\bBOX\b|RƯƠNG|TREO|HAZİNE',
-        upper
-    ):
-        return False
-
-    if "🟡" in text:
-        return False
-
     if token_data:
 
         value = token_data.get(
@@ -1782,15 +1747,6 @@ def detect_type(
             "True"
         ]:
             return True
-
-        if value in [
-            False,
-            0,
-            "0",
-            "false",
-            "False"
-        ]:
-            return False
 
     return None
 
@@ -1976,7 +1932,7 @@ def get_live_link(
 
 
 # ============================================================
-# PARSER
+# PARSER (Sadece Goody Bag)
 # ============================================================
 
 def parse_source_message(event):
@@ -2160,7 +2116,7 @@ def parse_source_message(event):
             "fallback:"
             + "|".join([
                 str(room),
-                "GOODY BAG" if is_goody else "CHEST",
+                "GOODY BAG",
                 str(coins),
                 str(people),
                 str(target_time),
@@ -2169,14 +2125,10 @@ def parse_source_message(event):
 
     return {
         "type":
-            "GOODY BAG"
-            if is_goody
-            else "CHEST",
+            "GOODY BAG",
 
         "box_name":
-            "Goody Bag"
-            if is_goody
-            else "Hazine Sandığı",
+            "Goody Bag",
 
         "username":
             username,
@@ -2283,11 +2235,7 @@ def add_to_radar(data):
                 event_key
             )
 
-    target = (
-        LIVE_GOODY_BAGS
-        if data["type"] == "GOODY BAG"
-        else LIVE_CHESTS
-    )
+    target = LIVE_GOODY_BAGS
 
     room = data.get("room")
 
@@ -2531,11 +2479,7 @@ async def telegram_api(
 
 async def send_telegram_message(data):
 
-    title = (
-        "🟪 GOODY BAG"
-        if data["type"] == "GOODY BAG"
-        else "🟨 HAZİNE SANDIĞI"
-    )
+    title = "🟪 GOODY BAG"
 
     alarm = is_smart_alarm(
         data
@@ -2712,18 +2656,7 @@ async def send_follow_notifications(data):
             user_id
         )
 
-        if (
-            data["type"] == "GOODY BAG"
-            and
-            settings["mute_goody"]
-        ):
-            continue
-
-        if (
-            data["type"] == "CHEST"
-            and
-            settings["mute_chest"]
-        ):
+        if settings["mute_goody"]:
             continue
 
         text = (
@@ -3009,9 +2942,7 @@ def build_vip_admin_report(
 
         "🌐 RADAR YÖNETİMİ\n"
         "• 🟪 Goody Bag radarını yönetme\n"
-        "• 🟨 Hazine Sandığı radarını yönetme\n"
-        "• 🔎 Radar verilerini görüntüleme\n"
-        "• 🎛 Arama ve filtreler\n\n"
+        "• 🔎 Radar verilerini görüntüleme\n\n"
 
         "👥 VIP SİSTEMİ\n"
         "• VIP üyeleri yönetme\n"
@@ -3457,10 +3388,6 @@ body{
  border-color:#2dd4c8;
 }
 
-.latest-card.chest{
- border-color:#2dd4c8;
-}
-
 .latest-card.alarm{
  box-shadow:0 0 15px rgba(255,70,70,.35);
  border-color:#ff4545;
@@ -3512,60 +3439,9 @@ body{
  font-weight:1000;
 }
 
-.search{
- width:100%;
- padding:13px 15px;
- margin-bottom:9px;
- border-radius:14px;
- border:1px solid #1d3330;
- outline:none;
- background:#0d1613;
- color:#fff;
- font-size:15px;
- font-weight:700;
- transition:border-color .15s ease;
-}
-
-.search:focus{
- border-color:#2dd4c8;
-}
-
-.search::placeholder{
- color:#7d879d;
-}
-
-.filters{
- display:flex;
- gap:7px;
- overflow-x:auto;
- padding-bottom:9px;
- scrollbar-width:none;
-}
-
-.filters::-webkit-scrollbar{
- display:none;
-}
-
-.filter{
- flex-shrink:0;
- padding:10px 14px;
- border-radius:12px;
- border:1px solid #2b3347;
- background:#101420;
- color:#aeb7ca;
- font-size:12px;
- font-weight:1000;
-}
-
-.filter.active{
- color:#0a2e29;
- background:#2dd4c8;
- border-color:#2dd4c8;
-}
-
 .radar-grid{
  display:grid;
- grid-template-columns:1fr 1fr;
+ grid-template-columns:1fr;
  gap:8px;
  align-items:start;
 }
@@ -3582,10 +3458,6 @@ body{
  border-color:rgba(45,212,200,.5);
 }
 
-.panel.chest{
- border-color:rgba(45,212,200,.5);
-}
-
 .panel-title{
  display:flex;
  align-items:center;
@@ -3599,10 +3471,6 @@ body{
 }
 
 .goody .panel-name{
- color:#7de8df;
-}
-
-.chest .panel-name{
  color:#7de8df;
 }
 
@@ -3631,10 +3499,6 @@ body{
 }
 
 .goody .card{
- border-left:4px solid #2dd4c8;
-}
-
-.chest .card{
  border-left:4px solid #2dd4c8;
 }
 
@@ -3822,11 +3686,6 @@ body{
   font-size:32px;
  }
 
- .radar-grid{
-  grid-template-columns:1fr 1fr;
-  gap:6px;
- }
-
  .panel{
   padding:7px;
  }
@@ -3899,7 +3758,7 @@ body{
  </div>
 
  <div class="subtitle">
-  🟪 GOODY BAG • 🟨 HAZİNE SANDIĞI
+  🟪 GOODY BAG
  </div>
 
  <div id="status" class="status">
@@ -3915,41 +3774,6 @@ body{
  </div>
 
  <div id="latest"></div>
-
-</div>
-
-<input
- id="search"
- class="search"
- type="text"
- placeholder="🔎 Kullanıcı ara..."
->
-
-<div class="filters">
-
- <button class="filter active" data-filter="ALL">
-  📡 TÜMÜ
- </button>
-
- <button class="filter" data-filter="GOODY">
-  🟪 GOODY
- </button>
-
- <button class="filter" data-filter="CHEST">
-  🟨 CHEST
- </button>
-
- <button class="filter" data-filter="COIN100">
-  🪙 100+ COIN
- </button>
-
- <button class="filter" data-filter="PEOPLE50">
-  👥 50+
- </button>
-
- <button class="filter" data-filter="ALARM">
-  🚨 ALARM
- </button>
 
 </div>
 
@@ -3970,24 +3794,6 @@ body{
  </div>
 
  <div id="bags"></div>
-
-</div>
-
-<div class="panel chest">
-
- <div class="panel-title">
-
-  <div class="panel-name">
-   🟨 HAZİNE SANDIĞI
-  </div>
-
-  <div id="chestCounter" class="panel-count">
-   0
-  </div>
-
- </div>
-
- <div id="chests"></div>
 
 </div>
 
@@ -4013,19 +3819,13 @@ if(tg){
 }
 
 let radarData = {
- chests:[],
  goody_bags:[]
 };
 
 let firstLoad = true;
-let activeFilter = "ALL";
-let searchText = "";
 
 const seenGoody = new Set();
-const seenChest = new Set();
-
 const newGoody = new Set();
-const newChest = new Set();
 
 
 function escapeHtml(value){
@@ -4077,21 +3877,6 @@ function itemKey(item){
    String(item.detected_at ?? "")
   )
  );
-
-}
-
-
-function latestFive(items){
-
- if(!Array.isArray(items))
-  return [];
-
- return [...items]
-  .sort(
-   (a,b)=>
-    timestamp(b)-timestamp(a)
-  )
-  .slice(0,5);
 
 }
 
@@ -4209,8 +3994,7 @@ async function copyUsername(username, el){
 
 
 function filterItems(
- items,
- type
+ items
 ){
 
  const sorted =
@@ -4221,59 +4005,8 @@ function filterItems(
      )
    : [];
 
- const matched = sorted.filter(item=>{
-
-  const username =
-   String(
-    item.username ?? ""
-   ).toLowerCase();
-
-  if(
-   searchText &&
-   !username.includes(searchText)
-  )
-   return false;
-
-  if(
-   activeFilter === "GOODY" &&
-   type !== "GOODY"
-  )
-   return false;
-
-  if(
-   activeFilter === "CHEST" &&
-   type !== "CHEST"
-  )
-   return false;
-
-  if(
-   activeFilter === "COIN100" &&
-   numberValue(item.coins) < 100
-  )
-   return false;
-
-  if(
-   activeFilter === "PEOPLE50" &&
-   numberValue(item.people) < 50
-  )
-   return false;
-
-  if(
-   activeFilter === "ALARM" &&
-   !isAlarm(item)
-  )
-   return false;
-
-  return true;
-
- });
-
- // Arama yokken akışı son 5 kayıtla sınırlı tut;
- // arama varken tüm eşleşmeleri göster (aksi halde
- // en son 5 kayıt dışındaki kullanıcılar hiç bulunamaz).
- return searchText
-  ? matched
-  : matched.slice(0,5);
+ // Akışı son 5 kayıtla sınırlı tut.
+ return sorted.slice(0,5);
 
 }
 
@@ -4321,17 +4054,10 @@ function renderLatest(){
    "latest"
   );
 
- const all = [
-
-  ...radarData.goody_bags.map(
+ const all =
+  radarData.goody_bags.map(
    x=>({...x,_type:"GOODY"})
-  ),
-
-  ...radarData.chests.map(
-   x=>({...x,_type:"CHEST"})
-  )
-
- ];
+  );
 
  all.sort(
   (a,b)=>
@@ -4350,18 +4076,9 @@ function renderLatest(){
  const item =
   all[0];
 
- const isGoody =
-  item._type === "GOODY";
+ const icon = "🟪";
 
- const icon =
-  isGoody
-  ? "🟪"
-  : "🟨";
-
- const cls =
-  isGoody
-  ? "goody"
-  : "chest";
+ const cls = "goody";
 
  const alarm =
   isAlarm(item);
@@ -4453,8 +4170,7 @@ function renderItems(
  originalItems,
  elementId,
  counterId,
- icon,
- type
+ icon
 ){
 
  const container =
@@ -4469,8 +4185,7 @@ function renderItems(
 
  const items =
   filterItems(
-   originalItems,
-   type
+   originalItems
   );
 
  counter.textContent =
@@ -4485,10 +4200,7 @@ function renderItems(
 
  }
 
- const newSet =
-  type === "GOODY"
-  ? newGoody
-  : newChest;
+ const newSet = newGoody;
 
  container.innerHTML =
 
@@ -4667,28 +4379,13 @@ function renderRadar(){
   newGoody
  );
 
- detectNewItems(
-  radarData.chests,
-  seenChest,
-  newChest
- );
-
  renderLatest();
 
  renderItems(
   radarData.goody_bags,
   "bags",
   "bagCounter",
-  "🟪",
-  "GOODY"
- );
-
- renderItems(
-  radarData.chests,
-  "chests",
-  "chestCounter",
-  "🟨",
-  "CHEST"
+  "🟪"
  );
 
 }
@@ -4755,11 +4452,6 @@ async function loadRadar(){
 
   radarData = {
 
-   chests:
-    Array.isArray(data.chests)
-    ? data.chests
-    : [],
-
    goody_bags:
     Array.isArray(data.goody_bags)
     ? data.goody_bags
@@ -4804,54 +4496,6 @@ async function loadRadar(){
  }
 
 }
-
-
-document
- .getElementById("search")
- .addEventListener(
-  "input",
-  function(){
-
-   searchText =
-    this.value
-     .trim()
-     .toLowerCase();
-
-   renderRadar();
-
-  }
- );
-
-
-document
- .querySelectorAll(".filter")
- .forEach(button=>{
-
-  button.addEventListener(
-   "click",
-   function(){
-
-    document
-     .querySelectorAll(".filter")
-     .forEach(x=>
-      x.classList.remove(
-       "active"
-      )
-     );
-
-    this.classList.add(
-     "active"
-    );
-
-    activeFilter =
-     this.dataset.filter;
-
-    renderRadar();
-
-   }
-  );
-
- });
 
 
 setInterval(
@@ -5132,15 +4776,6 @@ def normalize_radar_item_links(items):
     return result
 
 
-async def api_boxes(request):
-
-    return web.json_response(
-        normalize_radar_item_links(
-            LIVE_CHESTS.values()
-        )
-    )
-
-
 async def api_goody_bags(request):
 
     return web.json_response(
@@ -5156,9 +4791,6 @@ async def api_status(request):
 
         "status":
             "online",
-
-        "chests":
-            len(LIVE_CHESTS),
 
         "goody_bags":
             len(LIVE_GOODY_BAGS),
@@ -5178,11 +4810,6 @@ async def api_all(request):
 
         "server_time":
             int(time.time()),
-
-        "chests":
-            normalize_radar_item_links(
-                LIVE_CHESTS.values()
-            ),
 
         "goody_bags":
             normalize_radar_item_links(
@@ -5290,11 +4917,6 @@ async def api_miniapp_data(request):
         "expires_at":
             vip["expires_at"],
 
-        "chests":
-            normalize_radar_item_links(
-                LIVE_CHESTS.values()
-            ),
-
         "goody_bags":
             normalize_radar_item_links(
                 LIVE_GOODY_BAGS.values()
@@ -5348,11 +4970,6 @@ async def start_http_server():
     app.router.add_get(
         "/vip-yok",
         vip_blank_page
-    )
-
-    app.router.add_get(
-        "/api/boxes",
-        api_boxes
     )
 
     app.router.add_get(
@@ -5512,9 +5129,7 @@ def vip_permissions_text(vip):
         f"{remaining}\n\n"
 
         "🌐 VIP RADAR\n"
-        "• Canlı Goody Bag radarı\n"
-        "• Canlı Hazine Sandığı radarı\n"
-        "• Arama ve filtreler\n\n"
+        "• Canlı Goody Bag radarı\n\n"
 
         "🎯 KİŞİSEL ALARM\n"
         f"• {alarm_text}\n\n"
@@ -5526,8 +5141,7 @@ def vip_permissions_text(vip):
         "özel mesaj alırsın.\n\n"
 
         "🔕 SESSİZE ALMA\n"
-        "• Goody Bag\n"
-        "• Hazine Sandığı\n\n"
+        "• Goody Bag\n\n"
 
         "📌 KOMUTLAR\n"
         "/alarm\n"
@@ -6429,7 +6043,7 @@ async def alarm_cmd(
 
         f"👥 {people} veya daha az kişi\n\n"
 
-        "Uygun hazine geldiğinde "
+        "Uygun bir ödül geldiğinde "
         "sana özel bildirim gönderilecek."
 
     )
@@ -6639,14 +6253,10 @@ async def sessiz_cmd(
             "🔕 SESSİZE ALMA\n\n"
 
             f"🟪 Goody: "
-            f"{'KAPALI' if settings['mute_goody'] else 'AÇIK'}\n"
-
-            f"🟨 Chest: "
-            f"{'KAPALI' if settings['mute_chest'] else 'AÇIK'}\n\n"
+            f"{'KAPALI' if settings['mute_goody'] else 'AÇIK'}\n\n"
 
             "Kullanım:\n"
             "/sessiz goody\n"
-            "/sessiz chest\n"
             "/sessiz kapat"
 
         )
@@ -6668,25 +6278,11 @@ async def sessiz_cmd(
 
         return
 
-    if value == "chest":
-
-        save_user_settings(
-            user.id,
-            mute_chest=True
-        )
-
-        await update.message.reply_text(
-            "🔕 Hazine Sandığı bildirimleri sessize alındı."
-        )
-
-        return
-
     if value == "kapat":
 
         save_user_settings(
             user.id,
-            mute_goody=False,
-            mute_chest=False
+            mute_goody=False
         )
 
         await update.message.reply_text(
@@ -6699,7 +6295,6 @@ async def sessiz_cmd(
 
         "Kullanım:\n"
         "/sessiz goody\n"
-        "/sessiz chest\n"
         "/sessiz kapat"
 
     )
@@ -6730,7 +6325,6 @@ async def yardim_cmd(
 
         "🔕 SESSİZ\n"
         "/sessiz goody\n"
-        "/sessiz chest\n"
         "/sessiz kapat\n\n"
 
         "🌐 VIP RADAR\n"
@@ -6801,11 +6395,6 @@ async def message_listener(event):
         )
 
         if not data:
-            return
-
-        # Bu bot yalnızca GOODY BAG botu — CHEST olaylarını
-        # tamamen yok say (ne radara ekle ne Telegram'a gönder).
-        if data.get("type") != "GOODY BAG":
             return
 
         if add_to_radar(data):
@@ -7068,10 +6657,6 @@ async def main():
 
     print(
         "[HAZIR] Goody Bag aktif."
-    )
-
-    print(
-        "[HAZIR] Hazine Sandığı aktif."
     )
 
     print(
