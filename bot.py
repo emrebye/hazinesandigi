@@ -508,6 +508,15 @@ def init_db():
         )
     """)
 
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS blocks (
+            user_id INTEGER NOT NULL,
+            username TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            PRIMARY KEY(user_id, username)
+        )
+    """)
+
     conn.commit()
     conn.close()
 
@@ -1282,6 +1291,88 @@ def get_follows(user_id):
 
     return rows
 
+
+def add_block(user_id, username):
+
+    username = normalize_username(
+        username
+    )
+
+    if not username:
+        return False
+
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT OR IGNORE INTO blocks
+        (
+            user_id,
+            username,
+            created_at
+        )
+        VALUES (?, ?, ?)
+    """, (
+        user_id,
+        username,
+        int(time.time())
+    ))
+
+    changed = cur.rowcount > 0
+
+    conn.commit()
+    conn.close()
+
+    return changed
+
+
+def remove_block(user_id, username):
+
+    username = normalize_username(
+        username
+    )
+
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        DELETE FROM blocks
+        WHERE
+            user_id=?
+            AND username=?
+    """, (
+        user_id,
+        username
+    ))
+
+    changed = cur.rowcount > 0
+
+    conn.commit()
+    conn.close()
+
+    return changed
+
+
+def get_blocks(user_id):
+
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT username
+        FROM blocks
+        WHERE user_id=?
+        ORDER BY username ASC
+    """, (user_id,))
+
+    rows = [
+        row[0]
+        for row in cur.fetchall()
+    ]
+
+    conn.close()
+
+    return rows
 
 def get_followers(username):
 
@@ -3304,7 +3395,7 @@ MINI_APP_HTML = r"""
 html,body{
  margin:0;
  padding:0;
- min-height:100%;
+ min-height: var(--tg-vh, 100%);
  background:#080a12;
  color:#fff;
  font-family:Arial,Helvetica,sans-serif;
@@ -3313,13 +3404,16 @@ html,body{
 
 body{
  padding:8px;
+ padding-top:calc(8px + env(safe-area-inset-top, 0px));
+ padding-bottom:calc(8px + env(safe-area-inset-bottom, 0px));
  overflow-x:hidden;
 }
 
 .wrapper{
  width:100%;
- max-width:1100px;
- margin:auto;
+ max-width:100%;
+ margin:0;
+ padding:0;
 }
 
 .header{
@@ -3384,7 +3478,7 @@ body{
  border:1px solid #343b50;
 }
 
-.latest-card.goody{
+.latest-card.chest{
  border-color:#2dd4c8;
 }
 
@@ -3440,21 +3534,20 @@ body{
 }
 
 .radar-grid{
- display:grid;
- grid-template-columns:1fr;
- gap:8px;
- align-items:start;
+ display:block;
+ width:100%;
 }
 
 .panel{
  min-width:0;
+ width:100%;
  padding:8px;
  border-radius:16px;
  background:#0d111c;
  border:1px solid #293246;
 }
 
-.panel.goody{
+.panel.chest{
  border-color:rgba(45,212,200,.5);
 }
 
@@ -3470,7 +3563,7 @@ body{
  font-weight:1000;
 }
 
-.goody .panel-name{
+.chest .panel-name{
  color:#7de8df;
 }
 
@@ -3484,12 +3577,21 @@ body{
  font-weight:1000;
 }
 
+#goody{
+ display:flex;
+ flex-direction:column;
+ gap:10px;
+ width:100%;
+ overflow:hidden;
+}
+
 .card{
  position:relative;
  overflow:hidden;
- margin-bottom:7px;
- padding:9px;
- border-radius:13px;
+ width:100%;
+ margin-bottom:0;
+ padding:12px;
+ border-radius:14px;
  background:#12161f;
  border:1px solid #212a35;
 }
@@ -3498,7 +3600,7 @@ body{
  margin-bottom:0;
 }
 
-.goody .card{
+.chest .card{
  border-left:4px solid #2dd4c8;
 }
 
@@ -3508,29 +3610,26 @@ body{
 }
 
 .card.new-card{
- animation:newCard .8s ease-out;
+ animation:newCard .55s ease-out;
 }
 
 @keyframes newCard{
 
  0%{
-  opacity:1;
-  transform:translateY(0);
-  box-shadow:0 0 0 rgba(45,212,200,0);
- }
-
- 50%{
-  opacity:1;
-  transform:translateY(0);
-  box-shadow:0 0 24px rgba(45,212,200,.38);
+  opacity:0;
+  transform:translateY(18px);
  }
 
  100%{
   opacity:1;
   transform:translateY(0);
-  box-shadow:none;
  }
 
+}
+
+/* Liste güncellenirken kartlar hafif yukarı kayar */
+#goody{
+ transition: none;
 }
 .user-row{
  display:flex;
@@ -3552,7 +3651,7 @@ body{
  padding:3px 5px;
  margin:0;
  border-radius:8px;
- font-size:14px;
+ font-size:16px;
  font-weight:1000;
  text-align:left;
  cursor:pointer;
@@ -3582,6 +3681,24 @@ body{
  color:#fff;
  font-size:10px;
  font-weight:1000;
+}
+
+.block-btn{
+ flex-shrink:0;
+ border:0;
+ padding:5px 7px;
+ border-radius:7px;
+ background:#3a1f24;
+ color:#ff8a8a;
+ font-size:10px;
+ font-weight:1000;
+ cursor:pointer;
+}
+
+.block-btn:active{
+ transform:scale(.95);
+ background:#5a252c;
+ color:#fff;
 }
 
 .countdown{
@@ -3623,25 +3740,26 @@ body{
 .info-grid{
  display:grid;
  grid-template-columns:1fr 1fr;
- gap:5px;
+ gap:4px;
 }
 
 .info{
  min-width:0;
- padding:7px;
- border-radius:8px;
+ padding:8px 6px;
+ border-radius:10px;
  background:#151a27;
  color:#a3aec2;
- font-size:11px;
+ font-size:12px;
  font-weight:900;
- line-height:1.15;
+ line-height:1.2;
+ text-align:center;
 }
 
 .info b{
  display:block;
- margin-top:3px;
+ margin-top:4px;
  color:#fff;
- font-size:14px;
+ font-size:20px;
  font-weight:1000;
  overflow:hidden;
  text-overflow:ellipsis;
@@ -3650,18 +3768,19 @@ body{
 
 .live-button{
  display:block;
- margin-top:8px;
- padding:10px 5px;
- border-radius:9px;
+ margin-top:10px;
+ padding:12px 5px;
+ border-radius:10px;
  text-align:center;
  text-decoration:none;
  color:#fff;
  background:#e31850;
- font-size:11px;
+ font-size:14px;
  font-weight:1000;
 }
 
 .empty{
+ grid-column:1 / -1;
  padding:22px 5px;
  text-align:center;
  color:#7d879d;
@@ -3679,42 +3798,47 @@ body{
 @media(max-width:700px){
 
  body{
-  padding:7px;
+  padding:6px;
  }
 
  .title{
-  font-size:32px;
+  font-size:28px;
  }
 
  .panel{
-  padding:7px;
+  padding:6px;
  }
 
  .panel-name{
-  font-size:12px;
+  font-size:13px;
+ }
+
+ #goody{
+  flex-direction:column;
+  gap:8px;
  }
 
  .card{
-  padding:8px;
+  padding:11px;
  }
 
  .copy-user{
   font-size:13px;
-  max-width:76%;
+  max-width:72%;
  }
 
  .info{
-  padding:6px;
-  font-size:10px;
+  padding:7px 4px;
+  font-size:11px;
  }
 
  .info b{
-  font-size:13px;
+  font-size:16px;
  }
 
  .live-button{
-  font-size:10px;
-  padding:9px 3px;
+  font-size:12px;
+  padding:10px 2px;
  }
 
 }
@@ -3722,7 +3846,7 @@ body{
 @media(max-width:390px){
 
  .panel-name{
-  font-size:11px;
+  font-size:12px;
  }
 
  .copy-user{
@@ -3730,15 +3854,20 @@ body{
  }
 
  .info{
-  font-size:9px;
+  font-size:10px;
  }
 
  .info b{
-  font-size:12px;
+  font-size:15px;
  }
 
  .live-button{
-  font-size:9px;
+  font-size:11px;
+  padding:9px 2px;
+ }
+
+ #goody{
+  gap:8px;
  }
 
 }
@@ -3767,19 +3896,9 @@ body{
 
 </div>
 
-<div class="latest-box">
-
- <div class="latest-title">
-  🏆 EN İYİ FIRSAT
- </div>
-
- <div id="latest"></div>
-
-</div>
-
 <div class="radar-grid">
 
-<div class="panel goody">
+<div class="panel chest">
 
  <div class="panel-title">
 
@@ -3787,13 +3906,13 @@ body{
    🟪 GOODY BAG
   </div>
 
-  <div id="bagCounter" class="panel-count">
+  <div id="goodyCounter" class="panel-count">
    0
   </div>
 
  </div>
 
- <div id="bags"></div>
+ <div id="goody"></div>
 
 </div>
 
@@ -3815,7 +3934,74 @@ const tg =
 
 if(tg){
  tg.ready();
- tg.expand();
+
+ function applyViewportHeight(){
+  const h = tg.viewportStableHeight || tg.viewportHeight || window.innerHeight;
+  document.documentElement.style.setProperty("--tg-vh", h + "px");
+  document.body.style.minHeight = h + "px";
+ }
+
+ function goFullscreen(){
+
+  try {
+   if (
+    tg.isVersionAtLeast &&
+    tg.isVersionAtLeast("8.0") &&
+    typeof tg.requestFullscreen === "function" &&
+    !tg.isFullscreen
+   ) {
+    tg.requestFullscreen();
+   }
+  } catch (e) {}
+
+  try {
+   if (typeof tg.postEvent === "function") {
+    tg.postEvent("web_app_request_fullscreen");
+   } else if (
+    typeof tg.WebApp === "object" &&
+    typeof tg.WebApp.postEvent === "function"
+   ) {
+    tg.WebApp.postEvent("web_app_request_fullscreen");
+   } else if (
+    window.Telegram &&
+    typeof window.Telegram.WebView === "object" &&
+    typeof window.Telegram.WebView.postEvent === "function"
+   ) {
+    window.Telegram.WebView.postEvent(
+     "web_app_request_fullscreen"
+    );
+   }
+  } catch (e) {}
+
+  try {
+   tg.expand();
+  } catch (e) {}
+
+  applyViewportHeight();
+
+ }
+
+ // Telegram ekranı her yeniden boyutlandırdığında (TikTok'tan
+ // geri dönüş, klavye açılıp kapanması, video/PIP kapanması vb.)
+ // tam ekranı ve yüksekliği yeniden uygula. Eski kod sadece
+ // açılışta birkaç kez çalışıyordu, bu yüzden geri dönüşlerde
+ // yarım ekranda kalıyordu.
+ tg.onEvent("viewportChanged", goFullscreen);
+ tg.onEvent("fullscreenChanged", applyViewportHeight);
+
+ goFullscreen();
+
+ // Bazı istemciler fullscreen isteğini ilk anda görmezden
+ // gelebiliyor; kısa bir gecikmeyle tekrar deniyoruz.
+ setTimeout(goFullscreen, 300);
+ setTimeout(goFullscreen, 1000);
+ setTimeout(goFullscreen, 2500);
+
+ try {
+  if (typeof tg.disableVerticalSwipes === "function") {
+   tg.disableVerticalSwipes();
+  }
+ } catch (e) {}
 }
 
 let radarData = {
@@ -3825,7 +4011,12 @@ let radarData = {
 let firstLoad = true;
 
 const seenGoody = new Set();
+
 const newGoody = new Set();
+
+const blockedUsers = new Set();
+
+let lastRenderedKeys = "";
 
 
 function escapeHtml(value){
@@ -3865,18 +4056,26 @@ function timestamp(item){
 
 function itemKey(item){
 
- return String(
-  item.event_key ??
-  item.source_message_id ??
-  item.room ??
-  (
-   String(item.username ?? "")
-   +
-   "_"
-   +
-   String(item.detected_at ?? "")
+ // Her yakalama benzersiz olsun (yeni bildirim gelsin)
+ const room = String(item.room ?? item.username ?? "");
+ const ts = String(item.detected_at ?? item.timestamp ?? 0);
+ const extra = String(item.event_key ?? item.source_message_id ?? "");
+ return room + "_" + ts + (extra ? "_" + extra : "");
+
+}
+
+
+function latestFive(items){
+
+ if(!Array.isArray(items))
+  return [];
+
+ return [...items]
+  .sort(
+   (a,b)=>
+    timestamp(b)-timestamp(a)
   )
- );
+  .slice(0,5);
 
 }
 
@@ -3894,6 +4093,78 @@ function isAlarm(item){
   people > 0 &&
   people <= 5
  );
+
+}
+
+
+async function blockUsername(username, btn){
+
+ username = String(username || "")
+  .replace(/^@+/, "")
+  .toLowerCase()
+  .trim();
+
+ if(!username)
+  return;
+
+ if(
+  !confirm(
+   "@" + username + " engellensin mi?\n\nBu yayıncının hazineleri artık radarında görünmez."
+  )
+ )
+  return;
+
+ try{
+
+  const headers = {
+   "Content-Type": "application/json"
+  };
+
+  if(tg && tg.initData){
+   headers["X-Telegram-Init-Data"] = tg.initData;
+  }
+
+  const response = await fetch(
+   "/api/miniapp-block",
+   {
+    method: "POST",
+    headers: headers,
+    body: JSON.stringify({
+     username: username,
+     action: "block"
+    })
+   }
+  );
+
+  const data = await response.json();
+
+  if(!data.ok){
+   alert(data.error || "Engellenemedi");
+   return;
+  }
+
+  blockedUsers.add(username);
+
+  if(Array.isArray(data.blocks)){
+   blockedUsers.clear();
+   data.blocks.forEach(u =>
+    blockedUsers.add(
+     String(u).replace(/^@+/, "").toLowerCase()
+    )
+   );
+  }
+
+  // Kartı anında listeden çıkar ve yeniden çiz
+  renderRadar();
+
+  if(tg && tg.HapticFeedback){
+   try{ tg.HapticFeedback.notificationOccurred("success"); }catch(e){}
+  }
+
+ }catch(e){
+  console.error(e);
+  alert("Engelleme başarısız");
+ }
 
 }
 
@@ -3994,18 +4265,27 @@ async function copyUsername(username, el){
 
 
 function filterItems(
- items
+ items,
+ type
 ){
 
  const sorted =
   Array.isArray(items)
-   ? [...items].sort(
-      (a,b)=>
-       timestamp(b)-timestamp(a)
-     )
+   ? [...items]
+      .filter(item=>{
+       const u = String(item.username ?? "")
+        .replace(/^@+/, "")
+        .toLowerCase();
+       return u && !blockedUsers.has(u);
+      })
+      .sort(
+       (a,b)=>
+        timestamp(b)-timestamp(a)
+      )
    : [];
 
- // Akışı son 5 kayıtla sınırlı tut.
+ // Akış her zaman son 5 kayıtla sınırlı tutulur.
+ // Yeni gelince en eski düşer, yeni alttan yukarı kayarak girer.
  return sorted.slice(0,5);
 
 }
@@ -4044,6 +4324,12 @@ function detectNewItems(
 
  });
 
+ // seenSet şişmesin
+ if(seenSet.size > 500){
+  const arr = Array.from(seenSet);
+  arr.slice(0, arr.length - 300).forEach(k => seenSet.delete(k));
+ }
+
 }
 
 
@@ -4054,10 +4340,13 @@ function renderLatest(){
    "latest"
   );
 
- const all =
-  radarData.goody_bags.map(
+ const all = [
+
+  ...radarData.goody_bags.map(
    x=>({...x,_type:"GOODY"})
-  );
+  )
+
+ ];
 
  all.sort(
   (a,b)=>
@@ -4078,7 +4367,7 @@ function renderLatest(){
 
  const icon = "🟪";
 
- const cls = "goody";
+ const cls = "chest";
 
  const alarm =
   isAlarm(item);
@@ -4166,68 +4455,20 @@ function renderLatest(){
 }
 
 
-function renderItems(
- originalItems,
- elementId,
- counterId,
- icon
-){
+function buildCardHtml(item, icon, isNew, alarm){
 
- const container =
-  document.getElementById(
-   elementId
-  );
+ const username =
+  String(item.username ?? "")
+   .replace(/^@+/,"");
 
- const counter =
-  document.getElementById(
-   counterId
-  );
+ const key = itemKey(item);
 
- const items =
-  filterItems(
-   originalItems
-  );
-
- counter.textContent =
-  items.length;
-
- if(!items.length){
-
-  container.innerHTML =
-   '<div class="empty">⚡ Veri yok.</div>';
-
-  return;
-
- }
-
- const newSet = newGoody;
-
- container.innerHTML =
-
-  items.map(item=>{
-
-   const key =
-    itemKey(item);
-
-   const isNew =
-    newSet.has(key);
-
-   const alarm =
-    isAlarm(item);
-
-   const username =
-    String(
-     item.username ?? ""
-    )
-     .replace(/^@+/,"");
-
-   return `
-
+ return `
     <div class="
      card
      ${isNew ? "new-card" : ""}
      ${alarm ? "alarm" : ""}
-    ">
+    " data-key="${escapeHtml(key)}">
 
      <div class="user-row">
 
@@ -4250,6 +4491,7 @@ function renderItems(
       <div style="
        display:flex;
        gap:4px;
+       align-items:center;
       ">
 
        ${
@@ -4276,6 +4518,15 @@ function renderItems(
         ""
        }
 
+       <button
+        type="button"
+        class="block-btn"
+        title="Bu yayıncıyı engelle"
+        onclick='blockUsername(${JSON.stringify(username)}, this)'
+       >
+        🚫
+       </button>
+
       </div>
 
      </div>
@@ -4301,11 +4552,6 @@ function renderItems(
       </div>
 
       <div class="info">
-       🙋 KATILAN
-       <b>${escapeHtml(item.joined)}</b>
-      </div>
-
-      <div class="info">
        📈 ORAN
        <b>${escapeHtml(item.rate)}</b>
       </div>
@@ -4313,13 +4559,6 @@ function renderItems(
       <div class="info">
        👀 İZLENME
        <b>${escapeHtml(item.view)}</b>
-      </div>
-
-      <div class="info">
-       🏠 ODA
-       <b title="${escapeHtml(item.room)}">
-        ${escapeHtml(item.room)}
-       </b>
       </div>
 
      </div>
@@ -4363,10 +4602,67 @@ function renderItems(
      }
 
     </div>
-
    `;
+}
 
-  }).join("");
+
+function renderItems(
+ originalItems,
+ elementId,
+ counterId,
+ icon,
+ type
+){
+
+ const container =
+  document.getElementById(
+   elementId
+  );
+
+ const counter =
+  document.getElementById(
+   counterId
+  );
+
+ const items =
+  filterItems(
+   originalItems,
+   type
+  );
+
+ counter.textContent =
+  items.length;
+
+ if(!items.length){
+
+  lastRenderedKeys = "";
+  container.innerHTML =
+   '<div class="empty">⚡ Veri yok.</div>';
+
+  return;
+
+ }
+
+ const keysNow = items.map(itemKey).join("|");
+ const newSet = newGoody;
+ const hasBrandNew = items.some(it => newSet.has(itemKey(it)));
+
+ // Aynı kayıtlar → DOM'a dokunma (sadece countdown güncellenir)
+ if(keysNow === lastRenderedKeys && !hasBrandNew){
+  return;
+ }
+
+ lastRenderedKeys = keysNow;
+
+ // Temiz tek seferde çiz — üst üste binme yok
+ container.innerHTML = items.map(item =>
+  buildCardHtml(
+   item,
+   icon,
+   newSet.has(itemKey(item)),
+   isAlarm(item)
+  )
+ ).join("");
 
 }
 
@@ -4379,14 +4675,27 @@ function renderRadar(){
   newGoody
  );
 
- renderLatest();
-
  renderItems(
   radarData.goody_bags,
-  "bags",
-  "bagCounter",
-  "🟪"
+  "goody",
+  "goodyCounter",
+  "🟪",
+  "GOODY"
  );
+
+ // Animasyon bitince YENİ bayrağını ve new-card sınıfını temizle
+ // Böylece her poll'da yanıp sönme olmaz
+ if(newGoody.size > 0){
+  setTimeout(function(){
+   newGoody.clear();
+   document.querySelectorAll(".card.new-card").forEach(function(el){
+    el.classList.remove("new-card");
+   });
+   document.querySelectorAll(".new-badge").forEach(function(el){
+    el.remove();
+   });
+  }, 700);
+ }
 
 }
 
@@ -4459,6 +4768,15 @@ async function loadRadar(){
 
   };
 
+  if(Array.isArray(data.blocks)){
+   blockedUsers.clear();
+   data.blocks.forEach(u =>
+    blockedUsers.add(
+     String(u).replace(/^@+/, "").toLowerCase()
+    )
+   );
+  }
+
   const status =
    document.getElementById(
     "status"
@@ -4500,7 +4818,7 @@ async function loadRadar(){
 
 setInterval(
  loadRadar,
- 10000
+ 4000
 );
 
 const COUNTDOWN_DURATION_SECONDS = 90;
@@ -4894,6 +5212,18 @@ async def api_miniapp_data(request):
 
     # Geçerli Telegram doğrulaması geldiğinde oturumu yenile.
     # Böylece TikTok'a gidip geri dönüldüğünde VIP erişimi korunur.
+    blocked = set(get_blocks(user_id))
+
+    goody_list = normalize_radar_item_links(
+        LIVE_GOODY_BAGS.values()
+    )
+
+    if blocked:
+        goody_list = [
+            item for item in goody_list
+            if normalize_username(item.get("username") or "") not in blocked
+        ]
+
     response = web.json_response({
 
         "ok":
@@ -4918,9 +5248,10 @@ async def api_miniapp_data(request):
             vip["expires_at"],
 
         "goody_bags":
-            normalize_radar_item_links(
-                LIVE_GOODY_BAGS.values()
-            ),
+            goody_list,
+
+        "blocks":
+            sorted(blocked),
 
         "server_time":
             int(time.time()),
@@ -4943,6 +5274,62 @@ async def api_miniapp_data(request):
 # ============================================================
 # HTTP SERVER
 # ============================================================
+
+
+async def api_miniapp_block(request):
+
+    init_data = (
+        request.headers.get("X-Telegram-Init-Data")
+        or
+        request.rel_url.query.get("initData")
+        or
+        ""
+    )
+
+    user = validate_telegram_init_data(init_data)
+
+    session_user_id = validate_miniapp_session(
+        request.cookies.get(MINI_APP_SESSION_COOKIE, "")
+    )
+
+    if user:
+        user_id = safe_int(user.get("id"))
+    elif session_user_id:
+        user_id = session_user_id
+    else:
+        return web.json_response(
+            {"ok": False, "error": "Geçersiz Telegram erişimi"},
+            status=401
+        )
+
+    if not get_vip(user_id):
+        return web.json_response(
+            {"ok": False, "error": "VIP erişimi gerekli"},
+            status=401
+        )
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    username = normalize_username(body.get("username") or "")
+
+    if not username:
+        return web.json_response(
+            {"ok": False, "error": "Kullanıcı adı gerekli"},
+            status=400
+        )
+
+    add_block(user_id, username)
+    blocked = get_blocks(user_id)
+
+    return web.json_response({
+        "ok": True,
+        "blocked": username,
+        "blocks": blocked,
+    })
+
 
 async def start_http_server():
 
@@ -4990,6 +5377,11 @@ async def start_http_server():
     app.router.add_get(
         "/api/miniapp-data",
         api_miniapp_data
+    )
+
+    app.router.add_post(
+        "/api/miniapp-block",
+        api_miniapp_block
     )
 
     runner = web.AppRunner(
